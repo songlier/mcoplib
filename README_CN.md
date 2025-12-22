@@ -2,15 +2,15 @@
 ## 编译
 note: 请优先在vllm/sglang的发布的镜像中进行编译， 比如:
 ```shell
-docker run  -it  --name=mcoplib-build  --shm-size 16384m --device=/dev/dri --device=/dev/mxcd --group-add=video  --network=host --ulimit memlock=-1 --privileged=true   -v /sw_home/yiyu/:/home/yiyu  -v /pde_ai/models:/models  ai-master/maca/sglang:0.5.1-maca.ai20251013-45-torch2.6-py310-ubuntu22.04-amd64  /bin/bash
+docker run  -it  --name=mcoplib-build  --shm-size 16384m --device=/dev/dri --device=/dev/mxcd --group-add=video  --network=host --ulimit memlock=-1 --privileged=true   -v /home/metax/:/home/metax  -v /pde_ai/models:/models  ai-master/maca/sglang:0.5.1-maca.ai20251013-45-torch2.6-py310-ubuntu22.04-amd64  /bin/bash
 ```
 
 安装编译依赖：
 ```shell
 #安装cmake, 注意：如果是镜像中编译，又是把代码放在到网络共享盘中的，则先需要切换到root用户，在root用户下安装cmake
-pip3 install cmake==3.26.3 -i  https://repo.metax-tech.com/r/pypi/simple
-#root用户下安装
-pip3 install pybind11 -i  https://repo.metax-tech.com/r/pypi/simple
+pip3 install cmake==3.26.3 
+pip3 install pybind11 
+pip3 install build
 ```
 环境变量设置：
 

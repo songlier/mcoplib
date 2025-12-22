@@ -2,15 +2,15 @@
 ## Compilation
 note: Please prioritize compiling within the published vllm/sglang Docker images, for example:
 ```shell
-docker run  -it  --name=mcoplib-build  --shm-size 16384m --device=/dev/dri --device=/dev/mxcd --group-add=video  --network=host --ulimit memlock=-1 --privileged=true   -v /sw_home/yiyu/:/home/yiyu  -v /pde_ai/models:/models  ai-master/maca/sglang:0.5.1-maca.ai20251013-45-torch2.6-py310-ubuntu22.04-amd64  /bin/bash
+docker run  -it  --name=mcoplib-build  --shm-size 16384m --device=/dev/dri --device=/dev/mxcd --group-add=video  --network=host --ulimit memlock=-1 --privileged=true   -v /sw_home/metax/:/home/metax  -v /pde_ai/models:/models  ai-master/maca/sglang:0.5.1-maca.ai20251013-45-torch2.6-py310-ubuntu22.04-amd64  /bin/bash
 ```
 
 Install build dependencies:
 ```shell
 # Install cmake. Note: If compiling inside a container and the code is stored on a network shared drive, you must first switch to the root user and install cmake as root.
-pip3 install cmake==3.26.3 -i  https://repo.metax-tech.com/r/pypi/simple
-# Install as root user
-pip3 install pybind11 -i  https://repo.metax-tech.com/r/pypi/simple
+pip3 install cmake==3.26.3 
+pip3 install pybind11
+pip3 install build
 ```
 Environment variable setup:
 
