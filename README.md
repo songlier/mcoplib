@@ -8,7 +8,7 @@ docker run  -it  --name=mcoplib-build  --shm-size 16384m --device=/dev/dri --dev
 Install build dependencies:
 ```shell
 # Install cmake. Note: If compiling inside a container and the code is stored on a network shared drive, you must first switch to the root user and install cmake as root.
-pip3 install cmake==3.26.3 
+pip3 install cmake==3.26.3 && pip3 install setuptools-scm==8.0
 pip3 install pybind11
 pip3 install build
 ```
