@@ -1,0 +1,10 @@
+include LICENSE
+include requirements/packages.txt
+include requirements/build.txt
+include CMakeLists.txt
+include mcoplib/version
+
+recursive-include include *
+recursive-include kernel *
+recursive-include cmake *
+recursive-include op *

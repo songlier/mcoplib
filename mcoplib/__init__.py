@@ -1,0 +1,200 @@
+import os
+import re
+import subprocess
+import sys
+import shutil
+from pathlib import Path
+from datetime import date, datetime
+import locale
+import regex as re
+import importlib.metadata
+import importlib.util
+
+
+from typing import Tuple, Optional, Dict
+
+DATE_RE = re.compile(r"^\s*(\d{8})(?:\.\d+)?\s*$")          # captures YYYYMMDD, allows optional .suffix
+RELEASE_RE = re.compile(r"^\s*(\d+(?:\.\d+)+)\s*$")         # digit(.digit)+ like 3.2 or 3.2.1.1
+
+def detect_version_format(ver: str) -> str:
+    """
+    返回 'date' / 'release' / 'invalid'
+    """
+    if ver is None:
+        return "invalid"
+    ver = ver.strip()
+    if DATE_RE.match(ver):
+        return "master"
+    if RELEASE_RE.match(ver):
+        return "release"
+    return "invalid"
+
+def parse_date_version(ver: str) -> Optional[date]:
+    """从可能带后缀的 date 版本（例如 '20251011.746' 或 '20251011'）解析出 datetime.date 对象"""
+    m = DATE_RE.match(ver)
+    if not m:
+        return None
+    date_part = m.group(1)  # YYYYMMDD
+    try:
+        dt = datetime.strptime(date_part, "%Y%m%d").date()
+        return dt
+    except ValueError:
+        return None
+
+def parse_release_major_minor(ver: str) -> Optional[Tuple[int, int]]:
+    """
+    解析 release 版本并返回 (major, minor) 两个整数。
+    若无法提取两个数字，则返回 None。
+    """
+    m = RELEASE_RE.match(ver)
+    if not m:
+        return None
+    parts = m.group(1).split(".")
+    if len(parts) < 2:
+        return None
+    try:
+        major = int(parts[0])
+        minor = int(parts[1])
+        return major, minor
+    except ValueError:
+        return None
+
+def compare_versions(v1: str, v2: str) -> Dict:
+    v1s = v1.strip() if isinstance(v1, str) else ""
+    v2s = v2.strip() if isinstance(v2, str) else ""
+    fmt1 = detect_version_format(v1s)
+    fmt2 = detect_version_format(v2s)
+
+    if fmt1 == "invalid" or fmt2 == "invalid":
+        msg = f"Unrecognized MACA version information,  building env maca={v1}, running env maca={v2}. \n"
+        print("WARNING:", msg)
+        return None
+
+    if fmt1 != fmt2:
+        msg = f"Maca version incompatibility, building env maca = {fmt1}, running env maca = {fmt2} \n"
+        print("WARNING:", msg)
+        return None
+
+    # 都是日期格式
+    if fmt1 == "master":
+        d1 = parse_date_version(v1s)
+        d2 = parse_date_version(v2s)
+        if d1 is None or d2 is None:
+            msg = f"Unrecognized MACA version information, building env maca ='{v1s}', running env maca='{v2s}'. \n"
+            print("WARNING:", msg)
+            return None
+        delta_days = abs((d1 - d2).days)
+        details = {"v1_date": d1.isoformat(), "v2_date": d2.isoformat(), "delta_days": delta_days}
+        if delta_days > 30:
+            msg = f"maca master version incompatibility, case master maca version need less than 30 days (<=30 days) :  building env maca: {d1.isoformat()}  running env maca=: {d2.isoformat()}(more than {delta_days} days)\n"
+            print("WARNING:", msg)
+            return None
+
+        else:
+            msg = f"maca master version matching successful. \n"
+            print("INFO:", msg)
+            return None
+
+    # 都是 release 格式
+    if fmt1 == "release":
+        mm1 = parse_release_major_minor(v1s)
+        mm2 = parse_release_major_minor(v2s)
+        if mm1 is None or mm2 is None:
+            msg = f"Unrecognized release major.minor:building env maca='{v1s}', building env maca='{v2s}'. \n"
+            print("WARNING:", msg)
+            return None
+
+        details = {"v1_major_minor": mm1, "v2_major_minor": mm2}
+        if mm1[0] != mm2[0] or mm1[1] != mm2[1]:
+            msg = f"Release maca version incompatibility,  building env maca={mm1[0]}.{mm1[1]}, building env maca={mm2[0]}.{mm2[1]}. \n"
+            print("WARNING:", msg)
+            return None
+
+        else:
+            msg = f"Release major.minor matching,  successful:{mm1[0]}.{mm1[1]}. \n"
+            print("INFO:", msg)
+            return None
+
+def get_build_maca_version(file_path: str) -> str:
+    """
+    从文件中提取 Build_Maca_Version 的值，例如：
+    Build_Maca_Version = ‘20251011.746, debug, x64’
+    → '20251011.746'
+    """
+    if os.path.exists(file_path):
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    if "Build_Maca_Version" in line:
+                        # 支持中英文引号，并允许空格
+                        match = re.search(r"Build_Maca_Version\s*=\s*[\"'‘’“”]?(.*)", line)
+                        if match:
+                            value = match.group(1).strip()  # 去掉首尾空格
+                            # 去掉可能的引号（中英文）
+                            value = re.sub(r"[\"'‘’“”]", "", value)
+                            # 如果包含逗号，只保留最后一个逗号之前的内容
+                            if "." in value:
+                                value = value.rsplit(".", 1)[0]
+                            # 去掉所有空格
+                            value = value.replace(" ", "")
+                            return value
+        except Exception as e:
+            print(f"WARNING get_build_maca_version Failed to read version file: {e} \n")
+            return None
+    else:
+        print(f"WARNING get_build_maca_version Version file not found at: {file_path} \n")
+        return None 
+        
+    return None
+
+def get_maca_version():
+    """
+    Returns the MACA SDK Version
+    """
+    maca_path = str(os.getenv('MACA_PATH','/opt/maca'))
+    if not os.path.exists(maca_path):
+        return None
+    file_full_path = os.path.join(maca_path, 'Version.txt')
+    if not os.path.isfile(file_full_path):
+        return None
+    
+    with open(file_full_path, 'r', encoding='utf-8') as file:
+        first_line = file.readline().strip()
+    value = first_line.split(":")[-1]
+    if "." in value:
+        value = value.rsplit(".", 1)[0]
+    return value
+
+def mcoplib_version_check():
+    run_maca_version = get_maca_version()
+    dir_path = os.path.dirname(os.path.abspath(__file__))
+    version_file = dir_path + '/' + "version"
+    build_maca_version = get_build_maca_version(version_file)
+    if run_maca_version is not None and build_maca_version is not None:
+        compare_versions(build_maca_version, run_maca_version)
+    else:
+        print("WARNING Get maca version or get mcoplib build maca version Fail.\n")
+
+
+
+
+def get_version():
+    # Get the path to the mcoplib distribution
+    version_path = os.path.join(os.path.dirname(__file__), "version")
+    version = "unknown"  # 默认值
+    if os.path.exists(version_path):
+        try:
+            with open(version_path, "r", encoding="utf-8") as f:
+                    version = f.read().strip()
+        except Exception as e:
+            print(f"WARNING Failed to read version file: {e} \n")
+    else:
+        print(f"WARNING Version file not found at: {version_path} \n")
+
+    print(f"Version info:{version} \n")
+
+
+print("INFO Print the version information of mcoplib during compilation.\n")
+get_version()
+print("INFO Staring Check the current MACA version of the operating environment.\n")
+mcoplib_version_check()

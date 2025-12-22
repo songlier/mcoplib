@@ -1,0 +1,44 @@
+[build-system]
+# Should be mirrored in requirements/build.txt
+requires = [
+    "cmake>=3.26.1",
+    "ninja",
+    "pybind11 >= 2.13.1",
+    "torch>=2.4.0",
+    "packaging>=24.2",
+    "setuptools>=69.5.1,<80.0.0",
+    "setuptools-scm>=8.0",
+    "wheel",
+]
+build-backend = "setuptools.build_meta"
+
+[project.scripts]
+#mcoplib_init = "mcoplib:post_installation"
+mcoplib_version = "mcoplib:get_version"
+
+[project]
+name = "mcoplib"
+license = { "file"= "LICENSE" }
+
+readme = "README.md"
+description = "op kernels for metax infer engine"
+classifiers = [
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.10",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
+dependencies = [
+    "numpy>=1.24,<2.0",
+    "torch>=2.4.0",
+    "pyyaml",
+    "pydantic >= 2.10",
+    "numba >= 0.61.2",
+    "pybind11 >= 2.13.1",
+    "flashinfer >=0.2.6"
+]
+requires-python = ">3.8,<3.13"
+dynamic = [ "version", "optional-dependencies"]
