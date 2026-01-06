@@ -23,6 +23,7 @@
 #include "../include/int8_quant_kernel.h"
 #include "../include/fused_add_layernorm_per_token_quant_padding_output.h"
 #include "../include/rms_norm_dynamic_per_token_quant.h"
+#include "../include/fused_moe_gate_deepseek.h"
 #include "gptq_marlin.h"
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -72,4 +73,18 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("size_m"), py::arg("size_n"), py::arg("size_k"),
         py::arg("sms"), py::arg("is_k_full"), py::arg("dtype") = torch_bfloat16,
         py::arg("use_atomic_cache") = true);
+
+    m.def("fused_moe_gate_deepseek", &fused_moe_gate_deepseek, "Fused moe gate topk selection",
+        py::arg("gating_outputs"),
+        py::arg("correction_bias"),
+        py::arg("out_routing_weights"),
+        py::arg("out_selected_experts"),
+        py::arg("topk"),
+        py::arg("renormalize"),
+        py::arg("num_expert_group"),
+        py::arg("topk_group"),
+        py::arg("num_fused_shared_experts"),
+        py::arg("scale_factor"),
+        py::arg("moegate_type").none(true)
+    );
 }

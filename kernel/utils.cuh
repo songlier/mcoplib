@@ -54,7 +54,86 @@ typedef enum
 #define cast_b128(ptr) reinterpret_cast<b128VecType *>(ptr)
 #define cast_b128_i(ptr) reinterpret_cast<b128VecType_i *>(ptr)
 
-#ifdef __MACA_ARCH__
+#ifdef __HPCC_ARCH__
+    #define __builtin_rcpf(x) __builtin_htc_rcpf(x)
+
+    #define __builtin_mbcnt_lo(mask, initial_value) __builtin_htc_mbcnt_lo(mask, initial_value)
+    #define CVT_B0TOF32(q, out) out = __builtin_htc_b0_cast_to_f32(q);
+    #define CVT_B1TOF32(q, out) out = __builtin_htc_b1_cast_to_f32(q);
+    #define CVT_B2TOF32(q, out) out = __builtin_htc_b2_cast_to_f32(q);
+    #define CVT_B3TOF32(q, out) out = __builtin_htc_b3_cast_to_f32(q);
+    #define _pk_fma_f32 __builtin_htc_pk_fma_f32
+    #define FENCE__ asm volatile(";")
+    #define arrive_gvmcnt(num) __builtin_htc_arrive(64 + num)
+    #define arrive_bsmcnt(num) __builtin_htc_arrive(4096 + 128 * num)
+    #define arrive_gvm_bsmcnt(gvm, bsm) __builtin_htc_arrive(4096 | (128 * bsm) | 64 | gvm)
+    #define barrier __builtin_htc_barrier_inst
+    #define barrier_all __builtin_htc_barrier_ex(0)
+    #define barrier_bsm __builtin_htc_barrier_ex(1)
+    #define barrier_inst __builtin_htc_barrier_ex(2)
+    #define ldg_b32_reg_noasync(dst, base, pred, ret0_en)                                                \
+        dst = __builtin_htc_ldg_b32_predicator(cast_b32(base), 0, ret0_en, true, false, false, pred, 1, \
+                                            HPCC_ICMP_EQ)[0];
+    #define ldg_b64_reg_noasync(dst, base, pred, ret0_en)                                                \
+        dst = __builtin_htc_ldg_b64_predicator(cast_b64(base), 0, ret0_en, true, false, false, pred, 1, \
+                                            HPCC_ICMP_EQ);
+    #define ldg_b128_reg_noasync(dst, base, pred, ret0_en)                                                \
+        dst = __builtin_htc_ldg_b128_predicator(cast_b128(base), 0, ret0_en, true, false, false, pred, 1, \
+                                            HPCC_ICMP_EQ);
+
+    #define ldg_b32_reg_async(dst, base, pred, ret0_en)                                                \
+        dst = __builtin_htc_ldg_b32_predicator(cast_b32(base), 0, ret0_en, true, false, true, pred, 1, \
+                                            HPCC_ICMP_EQ)[0];
+    #define ldg_b64_reg_async(dst, base, pred, ret0_en)                                                \
+        dst = __builtin_htc_ldg_b64_predicator(cast_b64(base), 0, ret0_en, true, false, true, pred, 1, \
+                                            HPCC_ICMP_EQ);
+    #define ldg_b128_reg_async(dst, base, pred, ret0_en)                                                 \
+        dst = __builtin_htc_ldg_b128_predicator(cast_b128(base), 0, ret0_en, true, false, true, pred, 1, \
+                                                HPCC_ICMP_EQ);
+    #define ldg_b64_v4h_reg_async(dst, base, pred, ret0_en)                                                \
+        dst = __builtin_htc_ldg_b64_predicator(cast_b64(base), 0, ret0_en, true, false, true, pred, 1, \
+                                            HPCC_ICMP_EQ);
+
+    #define ldg_b32_bsm_noasync(saddr, base, pred, ret0_en)                                                    \
+        __builtin_htc_ldg_b32_bsm_predicator(cast_b32(saddr), cast_b32(base), 0, ret0_en, true, false, false, \
+                                            pred, 1, HPCC_ICMP_EQ);
+    #define ldg_b64_bsm_noasync(saddr, base, pred, ret0_en)                                                    \
+        __builtin_htc_ldg_b64_bsm_predicator(cast_b64(saddr), cast_b64(base), 0, ret0_en, true, false, false, \
+                                            pred, 1, HPCC_ICMP_EQ);
+    #define ldg_b128_bsm_noasync(saddr, base, pred, ret0_en)                                                \
+        __builtin_htc_ldg_b128_bsm_predicator(cast_b128(saddr), cast_b128(base), 0, ret0_en, true, false, \
+                                            false, pred, 1, HPCC_ICMP_EQ);
+
+    #define ldg_b32_bsm_async(saddr, base, pred, ret0_en)                                                    \
+        __builtin_htc_ldg_b32_bsm_predicator(cast_b32(saddr), cast_b32(base), 0, ret0_en, true, false, true, \
+                                            pred, 1, HPCC_ICMP_EQ);
+    #define ldg_b64_bsm_async(saddr, base, pred, ret0_en)                                                    \
+        __builtin_htc_ldg_b64_bsm_predicator(cast_b64(saddr), cast_b64(base), 0, ret0_en, true, false, true, \
+                                            pred, 1, HPCC_ICMP_EQ);
+    #define ldg_b128_bsm_async(saddr, base, pred, ret0_en)                                                \
+        __builtin_htc_ldg_b128_bsm_predicator(cast_b128(saddr), cast_b128(base), 0, ret0_en, true, false, \
+                                            true, pred, 1, HPCC_ICMP_EQ);
+
+    #define stg_b32_async(data, base, pred)                                                   \
+        __builtin_htc_stg_b32_predicator(cast_b32(base), 0, data, true, false, true, pred, 1, \
+                                        HPCC_ICMP_EQ);
+    #define stg_b64_async(data, base, pred)                                                   \
+        __builtin_htc_stg_b64_predicator(cast_b64(base), 0, data, true, false, true, pred, 1, \
+                                        HPCC_ICMP_EQ);
+    #define stg_b128_async(data, base, pred)                                                    \
+        __builtin_htc_stg_b128_predicator(cast_b128(base), 0, data, true, false, true, pred, 1, \
+                                        HPCC_ICMP_EQ);
+
+    #define perm_b32(dst, reg1, reg2, selector) dst = __builtin_htc_byte_perm(reg1, reg2, selector)
+
+    #define mma_16x16x16f16(a_reg, b_reg, c_reg) \
+        c_reg = __builtin_htc_mma_16x16x16f16(a_reg, b_reg, c_reg)
+
+    #define mma_16x16x16bf16(a_reg, b_reg, c_reg) \
+        c_reg = __builtin_htc_mma_16x16x16bf16(a_reg, b_reg, c_reg)
+
+
+#elif defined(__MACA_ARCH__)
     #define __builtin_rcpf(x) __builtin_mxc_rcpf(x)
 
     #define __builtin_mbcnt_lo(mask, initial_value) __builtin_mxc_mbcnt_lo(mask, initial_value)

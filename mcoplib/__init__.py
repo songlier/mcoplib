@@ -175,9 +175,6 @@ def mcoplib_version_check():
     else:
         print("WARNING Get maca version or get mcoplib build maca version Fail.\n")
 
-
-
-
 def get_version():
     # Get the path to the mcoplib distribution
     version_path = os.path.join(os.path.dirname(__file__), "version")
@@ -192,6 +189,7 @@ def get_version():
         print(f"WARNING Version file not found at: {version_path} \n")
 
     print(f"Version info:{version} \n")
+
 
 
 print("INFO Print the version information of mcoplib during compilation.\n")
