@@ -1,3 +1,6 @@
+"""
+Copyright (c) 2025 by MetaX Integrated Circuits (Shanghai) Co., Ltd. All Rights Reserved.
+"""
 
 import os
 import sys

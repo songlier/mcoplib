@@ -18,6 +18,7 @@ mcoplib_version = "mcoplib:get_version"
 
 [project]
 name = "mcoplib"
+authors = [{name = "mcoplib metax Team"}]
 license = { "file"= "LICENSE" }
 
 readme = "README.md"
@@ -38,7 +39,8 @@ dependencies = [
     "pydantic >= 2.10",
     "numba >= 0.61.2",
     "pybind11 >= 2.13.1",
-    "flashinfer >=0.2.6"
+    "flashinfer >=0.2.6",
+    "triton >= 2.0.0"
 ]
 requires-python = ">3.8,<3.13"
 dynamic = [ "version", "optional-dependencies"]

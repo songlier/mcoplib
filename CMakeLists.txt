@@ -94,6 +94,7 @@ set(TORCH_SUPPORTED_VERSION_CUDA "2.6.0")
 
 find_python_from_executable(${VLLM_PYTHON_EXECUTABLE} "${PYTHON_SUPPORTED_VERSIONS}")
 
+# Supported NVIDIA architectures.
 # This check must happen after find_package(Torch) because that's when CMAKE_CUDA_COMPILER_VERSION gets defined
 if(DEFINED CMAKE_CUDA_COMPILER_VERSION AND
    CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.8)
@@ -153,6 +154,7 @@ endif()
 if(DEFINED ENV{BUILD_DEFAULT_OP_SUBMODULE})
     set(BUILD_DEFAULT_OP_SUBMODULE "$ENV{BUILD_DEFAULT_OP_SUBMODULE}")
 endif()
+
 
 #########trap kernel debug#############
 if(DEFINED ENV{CUDA_PATH})
@@ -442,6 +444,7 @@ if (BUILD_LMDEPLOY_SUBMODULE)
 
   set_target_properties(lmdeploy PROPERTIES PREFIX "" SUFFIX "${EXT_SUFFIX}")
 
+  #############lmdeploy ops end ###############
 endif()
 
 
@@ -471,10 +474,12 @@ if (BUILD_DEFAULT_OP_SUBMODULE)
       "${MCOPLIB_SRCS_DIR}/int8_quant_kernels.cu"
       "${MCOPLIB_SRCS_DIR}/fused_add_layernorm_per_token_quant_padding_output.cu"
       "${MCOPLIB_SRCS_DIR}/rms_norm_dynamic_per_token_quant.cu"
+      "${MCOPLIB_SRCS_DIR}/fused_moe_gate_deepseek.cu"
       "${MCOPLIB_SRCS_DIR}/gptq_marlin.cu")
 
   set_source_files_properties(
     "${MCOPLIB_SRCS_DIR}/gptq_marlin.cu"
+    "${MCOPLIB_SRCS_DIR}/fused_moe_gate_deepseek.cu"
     PROPERTIES
     COMPILE_FLAGS "-mllvm -metaxgpu-igroup=true -mllvm -metaxgpu-igroup-config=B8 -maxmregcount=128"
   )
@@ -536,12 +541,12 @@ if (BUILD_SGLANG_SUBMODULE)
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/sgl_diffusion/elementwise/timestep_embedding.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/elementwise/fused_layernorm_dynamic_per_token_quant_custom.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/elementwise/fused_rotary_emb.cu"
-      "${SGLANG_KERNELS_SRCS_DIR}/csrc/moe/cutlass_moe/scaled_mm_c2x.cu"
+      #"${SGLANG_KERNELS_SRCS_DIR}/csrc/moe/cutlass_moe/scaled_mm_c2x.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/moe/kimi_k2_moe_fused_gate.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/moe/fused_qknorm_rope_kernel.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/moe/moe_topk_sigmoid_kernels.cu"
-      "${SGLANG_KERNELS_SRCS_DIR}/csrc/mamba/causal_conv1d.cu"
-      "${SGLANG_KERNELS_SRCS_DIR}/csrc/cutlass_w8a8/scaled_mm_entry.cu")
+      "${SGLANG_KERNELS_SRCS_DIR}/csrc/mamba/causal_conv1d.cu")
+      #"${SGLANG_KERNELS_SRCS_DIR}/csrc/cutlass_w8a8/scaled_mm_entry.cu")
 
   set_gencode_flags_for_srcs(
     SRCS "${MCOPLIB_SGLANG_KERNEL_SRC}"
