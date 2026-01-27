@@ -8,6 +8,8 @@
 #include <torch/extension.h>
 #include <torch/torch.h>
 #include "../kernel/fused_moe_gate_deepseek.cuh"
+#include "mcoplib_ops_params_info.hpp"
+#include "mcoplib_ops_params_dump.hpp"
 
 namespace deepseek_moe_gate {
 
@@ -71,6 +73,8 @@ int fused_moe_gate_deepseek(
     std::optional<float> routed_scaling_factor,
     std::optional<int> moegate_type = {0}
 ) {
+    DEBUG_TRACE_PARAMS(gating_outputs, correction_bias, out_routing_weights, out_selected_experts, topk, renormalize, num_expert_group, topk_group, num_fused_shared_experts,routed_scaling_factor,moegate_type);
+    DEBUG_DUMP_PARAMS(gating_outputs, correction_bias, out_routing_weights, out_selected_experts, topk, renormalize, num_expert_group, topk_group, num_fused_shared_experts,routed_scaling_factor,moegate_type);
     int moe_type = 0;
     if (moegate_type.has_value()){
         TORCH_CHECK(((*moegate_type < 2)), "Expected moegate_type == DEEPSEEK(0) or SGLANG(1), but get ", *moegate_type);

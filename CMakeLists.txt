@@ -43,6 +43,7 @@ find_package(pybind11 CONFIG REQUIRED)
 include_directories(
     ${PYTHON_INCLUDE_DIRS}
     ${pybind11_INCLUDE_DIRS}
+    ${CMAKE_CURRENT_LIST_DIR}/common
 )
 
 #
