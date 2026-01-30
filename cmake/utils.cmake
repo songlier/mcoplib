@@ -415,8 +415,10 @@ function (define_gpu_extension_target GPU_MOD_NAME)
   target_compile_definitions(${GPU_MOD_NAME} PRIVATE
     "-DTORCH_EXTENSION_NAME=${GPU_MOD_NAME}")
   
-  target_include_directories(${GPU_MOD_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/op
-    ${GPU_INCLUDE_DIRECTORIES})
+  target_include_directories(${GPU_MOD_NAME} PRIVATE 
+    ${CMAKE_SOURCE_DIR}/op
+    ${GPU_INCLUDE_DIRECTORIES}
+    ${CMAKE_CURRENT_SOURCE_DIR}/common)
 
 
   target_link_directories(${GPU_MOD_NAME} PRIVATE ${TORCH_INSTALL_PREFIX}/lib)
