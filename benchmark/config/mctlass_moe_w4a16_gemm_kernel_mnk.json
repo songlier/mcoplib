@@ -1,0 +1,8 @@
+{
+    "device_id": 0,
+    "num_valid_tokens": 1024,
+    "N": 4096,
+    "K": 2048,
+    "group": 64,
+    "samples": 1000
+}

@@ -1,188 +1,103 @@
-# fused_add_rms_norm 算子性能测试
+# mxbench 性能测试工具
 
-本目录包含使用 NVBench 测试 `fused_add_rms_norm` 算子性能的代码。
+mxbench 是用于算子性能基准测试（Benchmark）的工具，旨在评估和记录算子的运行效率。
 
-## 文件说明
+## 性能指标 (Metrics)
+mxbench 输出的性能报告包含详细的精度验证与性能统计数据，各列含义说明如下：
 
-- `fused_add_rms_norm_nvbench.py`: 完整版本的性能测试代码，支持多种参数组合
-- `fused_add_rms_norm_simple.py`: 简化版本的测试代码，用于快速验证
-- `README.md`: 本文档
+### 1. 精度验证 (Accuracy Verification)
+* **Acc_Pass**: 精度验证结果（Yes/No）。指示算子输出是否通过了与参考实现的对比测试。
+* **Cos_Dist**: 余弦距离（Cosine Distance）。衡量算子输出与标准答案之间的误差，数值越接近 0.00e+00 表示精度越高。
+### 2. 基础配置 (Configuration)
+* **Op**: 被测试的算子名称（如 `fused_rope_fwd`）。
+* **dtype**: 测试使用的数据精度（如 `float16`, `bfloat16`）。
+* **Shape**: 输入数据的维度形状（例如 `(4096 4 32 128)`）。
+* **Samples**: 性能测试采样的迭代次数。
+### 3. 延迟与稳定性 (Latency & Stability)
+* **CPU Time**: 算子在 CPU 侧的平均调度/执行时间。
+* **GPU Time**: 算子在 GPU 侧的实际平均执行时间（核心性能指标）。
+* **Noise**: 性能波动率。表示多次测试中执行时间的抖动比例，数值越小表示性能越稳定。
+* **Batch GPU**: 批量处理模式下的 GPU 时间参考值。
+### 4. 吞吐与利用率 (Throughput & Efficiency)
+* **Elem/s**: 元素吞吐率。每秒处理的数据元素个数（Elements per second），反映计算能力。
+* **GlobalMem BW**: 全局内存带宽（Global Memory Bandwidth）。实际达到的显存传输速率（如 `2.528 TB/s`）。
+* **BWUtil**: 带宽利用率（Bandwidth Utilization）。实际带宽与硬件理论带宽的比率，用于评估算子是否达到内存瓶颈。
 
-## 环境要求
 
-1. **硬件要求**:
-   - NVIDIA GPU（支持 CUDA）
-   - 足够的 GPU 内存用于测试
+## 环境安装与配置
+mxbench提供了两种安装方式：自动安装脚本（推荐）和手动分步安装*
 
-2. **软件要求**:
-   - Python >= 3.8
-   - PyTorch >= 1.10
-   - NVBench Python API (`pynvbench`)
-   - mcoplib 算子库
-
-## 安装依赖
-
-### 1. 安装 NVBench
-
-参考 `nvbench/python/README.md` 中的说明：
-
-```bash
-cd nvbench/python
-pip install -e .
+### 方式一：自动安装（推荐）
+通过运行脚本自动完成 `mcoplib` 和 `mxbench` 的环境配置与安装。
+```shell
+#进入项目根目录下的 `benchmark` 目录：
+cd mcoplib/benchmark
+#运行环境构建脚本：
+./build_env.sh
 ```
 
-### 2. 安装 mcoplib
-
-确保 mcoplib 已经正确编译和安装：
-
+### 方式二：手动安装
+如果需要手动控制安装过程，请按照以下顺序执行。
+#### 1. 安装 mxbench (C++ Core)
+编译 mxbench 的 C++ 后端支持。
 ```bash
-cd mcoplib
-pip install -e .
+# 进入 mxbench 目录
+cd /path/to/source/dir/mcoplib/mxbench
+source env.sh
+# 创建构建目录
+mkdir build && cd build 
+# 执行 CMake 配置与编译
+cmake_maca -DCMAKE_CXX_STANDARD=17 \
+           -DCMAKE_CUDA_STANDARD=17 \
+           -DCMAKE_CUDA_ARCHITECTURES=80 \
+           -DCMAKE_CUDA_FLAGS="-I/workspace/mcoplib/mxbench/install/include" \
+           -DCMAKE_CXX_FLAGS="-Wno-unused-parameter -Wno-error -Wno-implicit-float-conversion -I/workspace/mcoplib/mxbench/install/include" \
+           .. && make_maca VERBOSE=1
+```
+
+#### 2. 安装 mxbench (Python Interface)
+构建并安装 mxbench 的 Python 接口 whl 包。
+```bash
+# 进入 python 目录
+cd /path/to/source/dir/mcoplib/mxbench/python
+# 设置编译变量
+source env.sh
+# 设置 mxbench 安装目录环境变量
+export NVBENCH_INSTALL_PATH='/workspace/mcoplib/mxbench/install'
+# 安装方式 A：开发者模式 (推荐)
+python setup.py develop
+# 安装方式 B：打包并安装 whl
+python setup.py bdist_wheel 
+# 或者直接调用 conda python: /opt/conda/bin/python3 setup.py bdist_wheel -v
+pip3 install ./dist/*.whl
 ```
 
 ## 使用方法
-
-### 快速开始（简化版本）
-
-运行简化版本的测试：
+安装完成后，在 `benchmark` 目录下使用 `mcoplib_mxbenchmark_ops.py` 脚本进行测试。
+### 基础命令
+```bash
+#查看帮助信息
+python mcoplib_mxbenchmark_ops.py --help
+#列出所有可用算子
+python mcoplib_mxbenchmark_ops.py --list
+```
+### 性能测试
+以下命令中的 `<OP_NAME>` 请替换为实际的算子名称（例如 `fused_bias_dropout`）
 
 ```bash
-cd mcoplib/benchmark
-python fused_add_rms_norm_simple.py
+#默认测试，仅运行测试并输出结果，不保存文件。
+python mcoplib_mxbenchmark_ops.py --op <OP_NAME>
+
+#生成基准数据 (--generate)
+#运行测试并将结果保存到 CSV 文件。如果 CSV 中没有该类记录，则新增记录。
+python mcoplib_mxbenchmark_ops.py --op <OP_NAME> --csv statistics/mcoplib_ops_performance.csv --generate
+
+#更新基准数据 (--update)
+#选取 CSV 表格中配置条件（Device, Shape, Dtype 等）完全一致的记录进行比较。
+#触发条件： 仅当当前 GPU Time 优于历史记录 5% 以上时，才会执行刷新并记录更好的性能指标。
+python mcoplib_mxbenchmark_ops.py --op <OP_NAME> --csv statistics/mcoplib_ops_performance.csv --update
+
+#对比模式 (--compare)
+#在配置条件一致的情况下，对比当前运行结果与 CSV 中的历史记录
+python mcoplib_mxbenchmark_ops.py --op <OP_NAME> --csv statistics/mcoplib_ops_performance.csv --compare
 ```
-
-这将使用固定的参数（1024 tokens, 512 hidden size, float16）运行测试。
-
-### 完整测试
-
-运行完整版本的测试，包含多种参数组合：
-
-```bash
-python fused_add_rms_norm_nvbench.py
-```
-
-### 常用命令行选项
-
-```bash
-# 列出所有可用的 benchmark
-python fused_add_rms_norm_nvbench.py --list
-
-# 在特定设备上运行
-python fused_add_rms_norm_nvbench.py --devices 0
-
-# 以 JSON 格式输出结果
-python fused_add_rms_norm_nvbench.py --json
-
-# 以 Markdown 格式输出结果
-python fused_add_rms_norm_nvbench.py --markdown
-
-# 禁用控制台输出（仅输出到文件）
-python fused_add_rms_norm_nvbench.py --no-console
-
-# 输出到文件
-python fused_add_rms_norm_nvbench.py --output results.json
-```
-
-### 指定特定的测试参数
-
-```bash
-# 只测试 float16 类型
-python fused_add_rms_norm_nvbench.py -a DType=0
-
-# 只测试特定的数据形状
-python fused_add_rms_norm_nvbench.py -a NumTokens=1024 -a HiddenSize=512
-
-# 组合多个参数
-python fused_add_rms_norm_nvbench.py -a DType=0 -a NumTokens=1024
-```
-
-## 输出说明
-
-NVBench 会输出详细的性能指标，包括：
-
-1. **时间指标**:
-   - 平均执行时间
-   - 最小/最大时间
-   - 标准差
-
-2. **吞吐量**:
-   - Elements/sec（每秒处理的元素数）
-   - Bytes/sec（每秒处理的字节数）
-   - Global Memory Throughput（全局内存吞吐量）
-
-3. **其他信息**:
-   - GPU 设备信息
-   - 测试参数（数据类型、形状等）
-
-## 测试参数说明
-
-### DType（数据类型）
-
-- `0`: float16 (半精度浮点数)
-- `1`: float32 (单精度浮点数)
-- `2`: bfloat16 (脑浮点数)
-
-### NumTokens（令牌数）
-
-测试的令牌数量，表示批处理大小 × 序列长度。
-
-常用值:
-- 小规模: 128, 256
-- 中规模: 1024, 2048
-- 大规模: 4096, 8192
-
-### HiddenSize（隐藏层大小）
-
-隐藏层的维度大小，对应模型中的隐藏维度。
-
-常用值:
-- 小模型: 512, 768
-- 中等模型: 1024, 2048
-- 大模型: 4096, 8192
-
-## 性能优化建议
-
-根据测试结果，可以考虑以下优化：
-
-1. **数据类型**: 使用 float16 或 bfloat16 可以提高吞吐量
-2. **批处理**: 增加 NumTokens 可以提高 GPU 利用率
-3. **内存访问**: 优化内存访问模式可以提高性能
-
-## 故障排除
-
-### 导入错误
-
-如果遇到 `ImportError: No module named 'mcoplib._C'`：
-
-```bash
-# 确保 mcoplib 已正确安装
-cd mcoplib
-pip install -e .
-```
-
-### NVBench 未安装
-
-如果遇到 `ImportError: No module named 'cuda.bench'`：
-
-```bash
-# 安装 NVBench Python API
-cd nvbench/python
-pip install -e .
-```
-
-### CUDA 相关错误
-
-确保：
-1. CUDA 驱动已正确安装
-2. PyTorch 已正确编译 CUDA 支持
-3. GPU 设备可用：`python -c "import torch; print(torch.cuda.is_available())"`
-
-## 参考文档
-
-- [NVBench 文档](../../docs/)
-- [PyTorch CUDA 扩展](https://pytorch.org/tutorials/advanced/cpp_extension.html)
-- [mcoplib 算子文档](../op/vllm/)
-
-## 许可证
-
-请参考主项目的许可证文件。
