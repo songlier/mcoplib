@@ -20,8 +20,6 @@ limitations under the License.
 #include <THC/THCAtomics.cuh>
 
 #include "utils.h"
-#include "mcoplib_ops_params_info.hpp"
-#include "mcoplib_ops_params_dump.hpp"
 
 #define VEC_SIZE 4
 using Vec = int4;
@@ -325,8 +323,6 @@ void moe_align_block_size(
     torch::Tensor num_tokens_post_pad,
     torch::Tensor cumsum_buffer,
     bool pad_sorted_token_ids) {
-  DEBUG_TRACE_PARAMS(topk_ids, num_experts, block_size, sorted_token_ids, experts_ids, num_tokens_post_pad, cumsum_buffer, pad_sorted_token_ids);
-  DEBUG_DUMP_PARAMS(topk_ids, num_experts, block_size, sorted_token_ids, experts_ids, num_tokens_post_pad, cumsum_buffer, pad_sorted_token_ids);
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
   int threads = 1024;

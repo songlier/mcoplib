@@ -9,9 +9,6 @@
 #include "cuda_compat.h"
 #include "dispatch_utils.h"
 
-#include "mcoplib_ops_params_info.hpp"
-#include "mcoplib_ops_params_dump.hpp"
-
 namespace vllm {
 
 template <typename scalar_t, scalar_t (*ACT_FN)(const scalar_t&),
@@ -133,16 +130,12 @@ __device__ __forceinline__ T gelu_tanh_kernel(const T& x) {
 void silu_and_mul(torch::Tensor& out,    // [..., d]
                   torch::Tensor& input)  // [..., 2 * d]
 {
-	DEBUG_TRACE_PARAMS(out, input);
-	DEBUG_DUMP_PARAMS(out, input);
   LAUNCH_ACTIVATION_GATE_KERNEL(vllm::silu_kernel, true);
 }
 
 void mul_and_silu(torch::Tensor& out,    // [..., d]
                   torch::Tensor& input)  // [..., 2 * d]
 {
-  DEBUG_TRACE_PARAMS(out, input);
-	DEBUG_DUMP_PARAMS(out, input);
   // The difference between mul_and_silu and silu_and_mul is that mul_and_silu
   // applies the silu to the latter half of the input.
   LAUNCH_ACTIVATION_GATE_KERNEL(vllm::silu_kernel, false);
@@ -151,16 +144,12 @@ void mul_and_silu(torch::Tensor& out,    // [..., d]
 void gelu_and_mul(torch::Tensor& out,    // [..., d]
                   torch::Tensor& input)  // [..., 2 * d]
 {
-  DEBUG_TRACE_PARAMS(out, input);
-  DEBUG_DUMP_PARAMS(out, input);
   LAUNCH_ACTIVATION_GATE_KERNEL(vllm::gelu_kernel, true);
 }
 
 void gelu_tanh_and_mul(torch::Tensor& out,    // [..., d]
                        torch::Tensor& input)  // [..., 2 * d]
 {
-  DEBUG_TRACE_PARAMS(out, input);
-  DEBUG_DUMP_PARAMS(out, input);
   LAUNCH_ACTIVATION_GATE_KERNEL(vllm::gelu_tanh_kernel, true);
 }
 
@@ -323,15 +312,11 @@ __global__ void swigluoai_and_mul_kernel(
 void fatrelu_and_mul(torch::Tensor& out,    // [..., d],
                      torch::Tensor& input,  // [..., 2 * d]
                      double threshold) {
-  DEBUG_TRACE_PARAMS(out, input, threshold);
-  DEBUG_DUMP_PARAMS(out, input, threshold);
   LAUNCH_ACTIVATION_GATE_KERNEL_WITH_PARAM(vllm::fatrelu_kernel, threshold);
 }
 void swigluoai_and_mul(torch::Tensor& out,    // [..., d]
                        torch::Tensor& input,  // [..., 2 * d]
                        double alpha, double limit) {
-  DEBUG_TRACE_PARAMS(out, input, alpha, limit);
-  DEBUG_DUMP_PARAMS(out, input, alpha, limit);
   LAUNCH_SIGLUOAI_AND_MUL(vllm::swigluoai_and_mul, alpha, limit);
 }
 namespace vllm {
@@ -424,23 +409,17 @@ __device__ __forceinline__ T gelu_quick_kernel(const T& x) {
 void gelu_new(torch::Tensor& out,    // [..., d]
               torch::Tensor& input)  // [..., d]
 {
-  DEBUG_TRACE_PARAMS(out, input);
-  DEBUG_DUMP_PARAMS(out, input);
   LAUNCH_ACTIVATION_KERNEL(vllm::gelu_new_kernel);
 }
 
 void gelu_fast(torch::Tensor& out,    // [..., d]
                torch::Tensor& input)  // [..., d]
 {
-  DEBUG_TRACE_PARAMS(out, input);
-  DEBUG_DUMP_PARAMS(out, input);
   LAUNCH_ACTIVATION_KERNEL(vllm::gelu_fast_kernel);
 }
 
 void gelu_quick(torch::Tensor& out,    // [..., d]
                 torch::Tensor& input)  // [..., d]
 {
-  DEBUG_TRACE_PARAMS(out, input);
-  DEBUG_DUMP_PARAMS(out, input);
   LAUNCH_ACTIVATION_KERNEL(vllm::gelu_quick_kernel);
 }
