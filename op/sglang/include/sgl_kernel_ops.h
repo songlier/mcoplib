@@ -937,26 +937,28 @@ void causal_conv1d_fwd(
     bool silu_activation,
     int64_t pad_slot_id);
 
-int64_t cutlass_moe_mm_gemm_kernel_m_w8a8(int64_t num_valid_tokens,
-                                          int64_t N, 
-                                          int64_t K, 
-                                          int64_t group);
-                                          
-void cutlass_moe_mm_w8a8(at::Tensor const& a, 
-                         at::Tensor const& b, 
-                         at::Tensor& c,
-                         at::Tensor const& a_scales, 
-                         at::Tensor const& b_scales, 
-                         at::Tensor const& moe_weight,
-                         at::Tensor const& token_ids, 
-                         at::Tensor const& expert_ids,
-                         at::Tensor const& num_tokens_post_padded,
-                         int64_t N, 
-                         int64_t K, 
-                         int64_t EM, 
-                         int64_t num_valid_tokens, 
-                         int64_t topk, 
-                         bool mul_routed_weight);
+#if ENABLE_CUTALASS_OP
+    int64_t cutlass_moe_mm_gemm_kernel_m_w8a8(int64_t num_valid_tokens,
+                                            int64_t N, 
+                                            int64_t K, 
+                                            int64_t group);
+                                            
+    void cutlass_moe_mm_w8a8(at::Tensor const& a, 
+                            at::Tensor const& b, 
+                            at::Tensor& c,
+                            at::Tensor const& a_scales, 
+                            at::Tensor const& b_scales, 
+                            at::Tensor const& moe_weight,
+                            at::Tensor const& token_ids, 
+                            at::Tensor const& expert_ids,
+                            at::Tensor const& num_tokens_post_padded,
+                            int64_t N, 
+                            int64_t K, 
+                            int64_t EM, 
+                            int64_t num_valid_tokens, 
+                            int64_t topk, 
+                            bool mul_routed_weight);
+#endif
 
 // /*
 //  * From csrc/expert_specialization
@@ -1051,23 +1053,30 @@ int64_t fused_mla_normal_kv_element_wise(
 // std::vector<at::Tensor>
 // sparse_prefill_fwd(const at::Tensor& q, const at::Tensor& kv, const at::Tensor& indices, double sm_scale, int64_t d_v);
 
-/*
-* From csrc/cutlass_w8a8
-*/
-void cutlass_scaled_mm(torch::Tensor& out, torch::Tensor const& a,
-                       torch::Tensor const& b, torch::Tensor const& a_scales,
-                       torch::Tensor const& b_scales,
-                       std::optional<torch::Tensor> const& bias);
+#if ENABLE_CUTALASS_OP
+    /*
+    * From csrc/cutlass_w8a8
+    */
+    void cutlass_scaled_mm(torch::Tensor& out, torch::Tensor const& a,
+                        torch::Tensor const& b, torch::Tensor const& a_scales,
+                        torch::Tensor const& b_scales,
+                        std::optional<torch::Tensor> const& bias);
 
-void cutlass_scaled_mm_azp(torch::Tensor& out, torch::Tensor const& a,
-                           torch::Tensor const& b,
-                           torch::Tensor const& a_scales,
-                           torch::Tensor const& b_scales,
-                           torch::Tensor const& azp_adj,
-                           std::optional<torch::Tensor> const& azp,
-                           std::optional<torch::Tensor> const& bias);
+    void cutlass_scaled_mm_azp(torch::Tensor& out, torch::Tensor const& a,
+                            torch::Tensor const& b,
+                            torch::Tensor const& a_scales,
+                            torch::Tensor const& b_scales,
+                            torch::Tensor const& azp_adj,
+                            std::optional<torch::Tensor> const& azp,
+                            std::optional<torch::Tensor> const& bias);
+#endif
 
 torch::Tensor mx_awq_dequantize(torch::Tensor _kernel, torch::Tensor _scaling_factors, torch::Tensor _zeros, int64_t split_k_iters, int64_t thx, int64_t thy);
+
+void per_token_cast_to_fp8(
+    torch::Tensor& out,
+    torch::Tensor& scale,   
+    torch::Tensor const& input);
 /*
  * From csrc/sgl_diffusion/elementwise
  */

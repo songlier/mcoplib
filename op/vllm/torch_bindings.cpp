@@ -16,6 +16,13 @@
 // https://docs.google.com/document/d/1_W62p8WJOQQUzPsJYa7s701JXt0qf2OfLub2sbkHOaU/edit#heading=h.ptttacy8y1u9
 // https://github.com/pytorch/pytorch/blob/main/aten/src/ATen/native/README.md#annotations
 
+#if ENABLE_OP_PROFILING
+#warning "ENABLE_OP_PROFILING is ENABLED"
+#else
+#warning "ENABLE_OP_PROFILING is DISABLED"
+#endif
+
+
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   // vLLM custom ops
   //
@@ -31,7 +38,6 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
 #else
   #define stride_tag
 #endif
-
 
   ops.def("weak_ref_tensor(Tensor input) -> Tensor");
   ops.impl("weak_ref_tensor", torch::kCUDA, &weak_ref_tensor);
@@ -180,15 +186,15 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
 
   // Optimized top-k per row operation
   ops.def(
-      "top_k_per_row(Tensor logits, Tensor rowStarts, Tensor rowEnds, "
+      "top_k_per_row_prefill(Tensor logits, Tensor rowStarts, Tensor rowEnds, "
       "Tensor! indices, int numRows, int stride0, "
-      "int stride1) -> ()");
-  ops.impl("top_k_per_row", torch::kCUDA, &top_k_per_row);
+      "int stride1, int topK) -> ()");
+  ops.impl("top_k_per_row_prefill", torch::kCUDA, &top_k_per_row_prefill);
 
   ops.def(
       "top_k_per_row_decode(Tensor logits, int next_n, "
-      "Tensor seq_lens, Tensor! indices, int numRows, "
-      "int stride0, int stride1) -> ()");
+      "Tensor seq_lens, Tensor! indices, "
+      "int numRows, int stride0, int stride1, int topK) -> ()");
   ops.impl("top_k_per_row_decode", torch::kCUDA, &top_k_per_row_decode);
 
   // ┌------------------------  Not supported for Metax
@@ -264,6 +270,7 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("awq_to_gptq_4bit(Tensor qweight) -> Tensor");
   ops.impl("awq_to_gptq_4bit", torch::kCUDA, &awq_to_gptq_4bit);
 
+#if ENABLE_CUTALASS_OP
   // CUTLASS w8a8 GEMM, supporting symmetric per-tensor or per-row/column
   // quantization, as well as bias
   ops.def(
@@ -324,6 +331,7 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   // of the given capability
   ops.def("cutlass_scaled_mm_supports_fp4(int cuda_device_capability) -> bool");
   ops.impl("cutlass_scaled_mm_supports_fp4", &cutlass_scaled_mm_supports_fp4);
+#endif
 
   // Quantized GEMM for GPTQ.
   // Note: even though the C++ inferred schema is correct for this op, it seems
@@ -334,7 +342,6 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
       "group_size, Tensor perm_space, "
       "Tensor temp_space, bool dtype_bf16)-> Tensor");
   ops.impl("gptq_gemm", torch::kCUDA, &gptq_gemm);
-
 
   // Post processing for GPTQ.
   ops.def("gptq_shuffle(Tensor! q_weight, Tensor q_perm, int bit) -> ()");
@@ -480,7 +487,17 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _cache_ops), cache_ops) {
       "int quant_block_size, str kv_cache_dtype) -> ()");
   cache_ops.impl("indexer_k_quant_and_cache", torch::kCUDA,
                  &indexer_k_quant_and_cache);
-                 
+
+  cache_ops.def(
+      "indexer_k_cache(Tensor k, Tensor! kv_cache, Tensor "
+      "slot_mapping) -> ()");
+  cache_ops.impl("indexer_k_cache", torch::kCUDA, &indexer_k_cache);
+
+   cache_ops.def(
+      "cp_gather_indexer_k_cache(Tensor kv_cache, Tensor! dst_k, "
+      "Tensor block_table, Tensor cu_seq_lens) -> ()");
+  cache_ops.impl("cp_gather_indexer_k_cache", torch::kCUDA,
+                 &cp_gather_indexer_k_cache);                
 
   cache_ops.def(
       "cp_gather_indexer_k_quant_cache(Tensor kv_cache, Tensor! dst_k, Tensor! "

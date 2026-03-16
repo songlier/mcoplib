@@ -235,13 +235,6 @@ if (BUILD_VLLM_SUBMODULE)
     "${VLLM_SRC_DIR}/cuda_utils_kernels.cu"
     "${VLLM_SRC_DIR}/torch_bindings.cpp")
 
-  # support opt of gptq-marlin
-  set_source_files_properties(
-    "${VLLM_SRC_DIR}/quantization/gptq/q_gemm.cu"
-    PROPERTIES
-    COMPILE_FLAGS "-mllvm -metaxgpu-igroup=true -mllvm -metaxgpu-igroup-config=B8 -maxmregcount=128"
-  )
-
   if(MCOPLIB_GPU_LANG STREQUAL "CUDA")
     SET(CUTLASS_ENABLE_HEADERS_ONLY ON CACHE BOOL "Enable only the header library")
 
@@ -287,13 +280,6 @@ if (BUILD_VLLM_SUBMODULE)
     set_gencode_flags_for_srcs(
       SRCS "${VLLM_EXT_SRC}"
       CUDA_ARCHS "${CUDA_ARCHS}")
-
-    # support opt of gptq-marlin
-    set_source_files_properties(
-      "${VLLM_SRC_DIR}/quantization/awq/gemm_kernels.cu"
-      PROPERTIES
-      COMPILE_FLAGS " -mllvm -metaxgpu-igroup=true -mllvm -metaxgpu-igroup-config=B8 -maxmregcount=128"
-    )
 
     # support opt of cutlass w8a8 scale mm
     set_source_files_properties(
@@ -500,14 +486,9 @@ if (BUILD_DEFAULT_OP_SUBMODULE)
       "${MCOPLIB_SRCS_DIR}/rms_norm_dynamic_per_token_quant.cu"
       "${MCOPLIB_SRCS_DIR}/fused_moe_gate_deepseek.cu"
       "${MCOPLIB_SRCS_DIR}/gptq_marlin.cu"
-      "${MCOPLIB_SRCS_DIR}/moe_fused_gate_opt.cu")
+      "${MCOPLIB_SRCS_DIR}/moe_fused_gate_opt.cu"
+      "${MCOPLIB_SRCS_DIR}/glm_attention_prepare.cu")
 
-  set_source_files_properties(
-    "${MCOPLIB_SRCS_DIR}/gptq_marlin.cu"
-    "${MCOPLIB_SRCS_DIR}/fused_moe_gate_deepseek.cu"
-    PROPERTIES
-    COMPILE_FLAGS "-mllvm -metaxgpu-igroup=true -mllvm -metaxgpu-igroup-config=B8 -maxmregcount=128"
-  )
   set_gencode_flags_for_srcs(
     SRCS "${MCOPLIB_EXT_SRC}"
     CUDA_ARCHS "${CUDA_ARCHS}")
@@ -564,6 +545,7 @@ if (BUILD_SGLANG_SUBMODULE)
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/quantization/int8_quant_kernels.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/quantization/quantize_kernel.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/sgl_diffusion/elementwise/timestep_embedding.cu"
+      "${SGLANG_KERNELS_SRCS_DIR}/csrc/quantization/fp8_quantize_kernel.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/elementwise/fused_layernorm_dynamic_per_token_quant_custom.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/elementwise/fused_rotary_emb.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/moe/kimi_k2_moe_fused_gate.cu"
@@ -602,8 +584,7 @@ if (BUILD_SGLANG_SUBMODULE)
     INCLUDE_DIRECTORIES ${SGLANG_KERNELS_SRCS_DIR}/csrc/fast_hadamard_transform)
 
   set_target_properties(sgl_kernel PROPERTIES PREFIX "" SUFFIX "${EXT_SUFFIX}")
-  target_link_libraries(sgl_kernel PRIVATE mctlassEx)
-
+  #target_link_libraries(sgl_kernel PRIVATE mctlassEx)
   #添加编译参数
   target_compile_options(sgl_kernel PRIVATE
       $<$<COMPILE_LANGUAGE:CUDA>:-O3 -std=c++17 -Xcompiler -fPIC -gencode=arch=compute_75,code=sm_75 -gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_89,code=sm_89 -gencode=arch=compute_90,code=sm_90>

@@ -2,7 +2,6 @@
 
 #include <optional>
 #include <torch/library.h>
-#include <tuple>
 
 #include "core/scalar_type.hpp"
 
@@ -102,13 +101,16 @@ void apply_repetition_penalties_(torch::Tensor& logits,
                                  const torch::Tensor& output_mask,
                                  const torch::Tensor& repetition_penalties);
 
-void top_k_per_row(const torch::Tensor& logits, const torch::Tensor& rowStarts,
-                   const torch::Tensor& rowEnds, torch::Tensor& indices,
-                   int64_t numRows, int64_t stride0, int64_t stride1);
+void top_k_per_row_prefill(const torch::Tensor& logits,
+                           const torch::Tensor& rowStarts,
+                           const torch::Tensor& rowEnds, torch::Tensor& indices,
+                           int64_t numRows, int64_t stride0, int64_t stride1,
+                           int64_t topK);
 
 void top_k_per_row_decode(const torch::Tensor& logits, int64_t next_n,
-                          const torch::Tensor& seq_lens, torch::Tensor& indices,
-                          int64_t numRows, int64_t stride0, int64_t stride1);
+                          const torch::Tensor& seqLens, torch::Tensor& indices,
+                          int64_t numRows, int64_t stride0, int64_t stride1,
+                          int64_t topK);
 
 void rms_norm_static_fp8_quant(torch::Tensor& out, torch::Tensor& input,
                                torch::Tensor& weight, torch::Tensor& scale,
@@ -168,11 +170,13 @@ void gelu_fast(torch::Tensor& out, torch::Tensor& input);
 
 void gelu_quick(torch::Tensor& out, torch::Tensor& input);
 
-void cutlass_mla_decode(torch::Tensor const& out, torch::Tensor const& q_nope,
-                        torch::Tensor const& q_pe,
-                        torch::Tensor const& kv_c_and_k_pe_cache,
-                        torch::Tensor const& seq_lens,
-                        torch::Tensor const& page_table, double scale);
+#if ENABLE_CUTALASS_OP
+    void cutlass_mla_decode(torch::Tensor const& out, torch::Tensor const& q_nope,
+                            torch::Tensor const& q_pe,
+                            torch::Tensor const& kv_c_and_k_pe_cache,
+                            torch::Tensor const& seq_lens,
+                            torch::Tensor const& page_table, double scale);
+#endif
 
 torch::Tensor get_cuda_view_from_cpu_tensor(torch::Tensor& cpu_tensor);
 
@@ -212,61 +216,63 @@ torch::Tensor ggml_moe_a8_vec(torch::Tensor X, torch::Tensor W,
 
 int64_t ggml_moe_get_block_size(int64_t type);
 
-bool cutlass_scaled_mm_supports_fp4(int64_t cuda_device_capability);
-bool cutlass_scaled_mm_supports_fp8(int64_t cuda_device_capability);
-bool cutlass_scaled_mm_supports_block_fp8(int64_t cuda_device_capability);
-bool cutlass_group_gemm_supported(int64_t cuda_device_capability);
+#if ENABLE_CUTALASS_OP
+    bool cutlass_scaled_mm_supports_fp4(int64_t cuda_device_capability);
+    bool cutlass_scaled_mm_supports_fp8(int64_t cuda_device_capability);
+    bool cutlass_scaled_mm_supports_block_fp8(int64_t cuda_device_capability);
+    bool cutlass_group_gemm_supported(int64_t cuda_device_capability);
 
-void cutlass_scaled_fp4_mm(torch::Tensor& D, torch::Tensor const& A,
-                           torch::Tensor const& B, torch::Tensor const& A_sf,
-                           torch::Tensor const& B_sf,
-                           torch::Tensor const& alpha);
+    void cutlass_scaled_fp4_mm(torch::Tensor& D, torch::Tensor const& A,
+                            torch::Tensor const& B, torch::Tensor const& A_sf,
+                            torch::Tensor const& B_sf,
+                            torch::Tensor const& alpha);
 
-void cutlass_scaled_mm(torch::Tensor& out, torch::Tensor const& a,
-                       torch::Tensor const& b, torch::Tensor const& a_scales,
-                       torch::Tensor const& b_scales,
-                       std::optional<torch::Tensor> const& bias);
+    void cutlass_scaled_mm(torch::Tensor& out, torch::Tensor const& a,
+                        torch::Tensor const& b, torch::Tensor const& a_scales,
+                        torch::Tensor const& b_scales,
+                        std::optional<torch::Tensor> const& bias);
 
-void cutlass_moe_mm(
-    torch::Tensor& out_tensors, torch::Tensor const& a_tensors,
-    torch::Tensor const& b_tensors, torch::Tensor const& a_scales,
-    torch::Tensor const& b_scales, torch::Tensor const& expert_offsets,
-    torch::Tensor const& problem_sizes, torch::Tensor const& a_strides,
-    torch::Tensor const& b_strides, torch::Tensor const& c_strides,
-    bool per_act_token, bool per_out_ch);
+    void cutlass_moe_mm(
+        torch::Tensor& out_tensors, torch::Tensor const& a_tensors,
+        torch::Tensor const& b_tensors, torch::Tensor const& a_scales,
+        torch::Tensor const& b_scales, torch::Tensor const& expert_offsets,
+        torch::Tensor const& problem_sizes, torch::Tensor const& a_strides,
+        torch::Tensor const& b_strides, torch::Tensor const& c_strides,
+        bool per_act_token, bool per_out_ch);
 
-void get_cutlass_moe_mm_data(
-    const torch::Tensor& topk_ids, torch::Tensor& expert_offsets,
-    torch::Tensor& problem_sizes1, torch::Tensor& problem_sizes2,
-    torch::Tensor& input_permutation, torch::Tensor& output_permutation,
-    const int64_t num_experts, const int64_t n, const int64_t k,
-    const std::optional<torch::Tensor>& blockscale_offsets);
+    void get_cutlass_moe_mm_data(
+        const torch::Tensor& topk_ids, torch::Tensor& expert_offsets,
+        torch::Tensor& problem_sizes1, torch::Tensor& problem_sizes2,
+        torch::Tensor& input_permutation, torch::Tensor& output_permutation,
+        const int64_t num_experts, const int64_t n, const int64_t k,
+        const std::optional<torch::Tensor>& blockscale_offsets);
 
-void get_cutlass_pplx_moe_mm_data(torch::Tensor& expert_offsets,
-                                  torch::Tensor& problem_sizes1,
-                                  torch::Tensor& problem_sizes2,
-                                  const torch::Tensor& expert_num_tokens,
-                                  const int64_t num_local_experts,
-                                  const int64_t padded_m, const int64_t n,
-                                  const int64_t k);
+    void get_cutlass_pplx_moe_mm_data(torch::Tensor& expert_offsets,
+                                    torch::Tensor& problem_sizes1,
+                                    torch::Tensor& problem_sizes2,
+                                    const torch::Tensor& expert_num_tokens,
+                                    const int64_t num_local_experts,
+                                    const int64_t padded_m, const int64_t n,
+                                    const int64_t k);
 
-void cutlass_scaled_mm_azp(torch::Tensor& out, torch::Tensor const& a,
-                           torch::Tensor const& b,
-                           torch::Tensor const& a_scales,
-                           torch::Tensor const& b_scales,
-                           torch::Tensor const& azp_adj,
-                           std::optional<torch::Tensor> const& azp,
-                           std::optional<torch::Tensor> const& bias);
+    void cutlass_scaled_mm_azp(torch::Tensor& out, torch::Tensor const& a,
+                            torch::Tensor const& b,
+                            torch::Tensor const& a_scales,
+                            torch::Tensor const& b_scales,
+                            torch::Tensor const& azp_adj,
+                            std::optional<torch::Tensor> const& azp,
+                            std::optional<torch::Tensor> const& bias);
 
-bool cutlass_sparse_scaled_mm_supported(int64_t cuda_device_capability);
+    bool cutlass_sparse_scaled_mm_supported(int64_t cuda_device_capability);
 
-void cutlass_scaled_sparse_mm(torch::Tensor& out, torch::Tensor const& a,
-                              torch::Tensor const& b, torch::Tensor const& e,
-                              torch::Tensor const& a_scales,
-                              torch::Tensor const& b_scales,
-                              std::optional<torch::Tensor> const& bias);
+    void cutlass_scaled_sparse_mm(torch::Tensor& out, torch::Tensor const& a,
+                                torch::Tensor const& b, torch::Tensor const& e,
+                                torch::Tensor const& a_scales,
+                                torch::Tensor const& b_scales,
+                                std::optional<torch::Tensor> const& bias);
 
-std::vector<torch::Tensor> cutlass_sparse_compress(torch::Tensor const& a);
+    std::vector<torch::Tensor> cutlass_sparse_compress(torch::Tensor const& a);
+#endif
 
 void scaled_fp4_quant(torch::Tensor& output, torch::Tensor const& input,
                       torch::Tensor& output_scale,

@@ -8,7 +8,9 @@ docker run  -it  --name=mcoplib-build  --shm-size 16384m --device=/dev/dri --dev
 Install build dependencies:
 ```shell
 # Install cmake. Note: If compiling inside a container and the code is stored on a network shared drive, you must first switch to the root user and install cmake as root.
-pip3 install cmake==3.30.4 && pip3 install setuptools-scm==8.0
+pip3 install cmake==3.26.3
+pip3 install setuptools-scm==8.0
+# Install pybind11
 pip3 install pybind11
 pip3 install build
 ```
@@ -129,6 +131,117 @@ export BUILD_LMDEPLOY_SUBMODULE=OFF
 export BUILD_DEFAULT_OP_SUBMODULE=OFF 
 # Control over multiple operator compilation modules
 export BUILD_VLLM_SUBMODULE=OFF  BUILD_SGLANG_SUBMODULE=OFF BUILD_LMDEPLOY_SUBMODULE=OFF
+```
+
+## Dynamic control operator input parameter information terminal output or parameter dump to the local disk
+```shell
+# Enable operator input parameter information to be output to the terminal (including data type, shape and other information)
+export MCOP_DEBUG_TRACE=1
+# enable dump
+export MCOP_DEBUG_PARAMS_DUMP=1
+
+# (Optional) Configure the number of samples
+export MCOP_TENSOR_DUMP_SAMPLE_SIZE=20
+# or dump all tensor data (optional)
+export MCOP_TENSOR_DUMP_FULL=1
+```
+### Operator parameter dump local example
+
+```json
+{
+  "function": "fused_moe_gate_deepseek",
+  "parameters": [
+    {
+      "name": "gating_outputs",
+      "type": "at::Tensor",
+      "dtype": "Half",
+      "shape": "[16, 448]",
+      "value": "[0.480469, 0.894531, 0.0356445, 0.0322266, 0.498047, 0.899902, 0.887207, 0.763672, 0.192871, 0.271484, ..., 0.730469, 0.484375, 0.0517578, 0.4375, 0.507812, 0.979492, 0.42041, 0.184082, 0.825195, 0.395508] (showing 20 of 7168 elements, set MCOP_TENSOR_DUMP_FULL=1 for all) [data_ptr=0x7f43fbc00000]",
+      "bytes": 14336
+    },
+    {
+      "name": "correction_bias",
+      "type": "at::Tensor",
+      "dtype": "Half",
+      "shape": "[448]",
+      "value": "[0.0732422, 0.508789, 0.522461, 0.0961914, 0.373535, 0.535645, 0.0454102, 0.862305, 0.300781, 0.5625, ..., 0.757324, 0.407227, 0.803711, 0.134766, 0.777344, 0.895996, 0.731445, 0.388184, 0.0571289, 0.395996] (showing 20 of 448 elements, set MCOP_TENSOR_DUMP_FULL=1 for all) [data_ptr=0x7f43fbc03800]",
+      "bytes": 896
+    },
+    {
+      "name": "out_routing_weights",
+      "type": "at::Tensor",
+      "dtype": "Float",
+      "shape": "[16, 8]",
+      "value": "[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ..., 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] (showing 20 of 128 elements, set MCOP_TENSOR_DUMP_FULL=1 for all) [data_ptr=0x7f43fbc03c00]",
+      "bytes": 512
+    },
+    {
+      "name": "out_selected_experts",
+      "type": "at::Tensor",
+      "dtype": "Int",
+      "shape": "[16, 8]",
+      "value": "[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ..., 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] (showing 20 of 128 elements, set MCOP_TENSOR_DUMP_FULL=1 for all) [data_ptr=0x7f43fbc03e00]",
+      "bytes": 512
+    },
+    {
+      "name": "topk",
+      "type": "int",
+      "dtype": "int",
+      "shape": "[]",
+      "value": "8",
+      "bytes": 4
+    },
+    {
+      "name": "renormalize",
+      "type": "bool",
+      "dtype": "bool",
+      "shape": "[]",
+      "value": "1",
+      "bytes": 1
+    },
+    {
+      "name": "num_expert_group",
+      "type": "int",
+      "dtype": "int",
+      "shape": "[]",
+      "value": "1",
+      "bytes": 4
+    },
+    {
+      "name": "topk_group",
+      "type": "int",
+      "dtype": "int",
+      "shape": "[]",
+      "value": "1",
+      "bytes": 4
+    },
+    {
+      "name": "num_fused_shared_experts",
+      "type": "std::optional<int>",
+      "dtype": "int",
+      "shape": "[]",
+      "value": "nullopt",
+      "bytes": 0
+    },
+    {
+      "name": "routed_scaling_factor",
+      "type": "std::optional<float>",
+      "dtype": "float",
+      "shape": "[]",
+      "value": "5.5",
+      "bytes": 4
+    },
+    {
+      "name": "moegate_type",
+      "type": "std::optional<int>",
+      "dtype": "int",
+      "shape": "[]",
+      "value": "0",
+      "bytes": 4
+    }
+  ]
+}
+
 ```
 
 ## Getting started
@@ -279,17 +392,20 @@ def fused_mla_normal_rotary_emb(
     Answer: Please execute the environment variable script env.sh before compiling: cd /code/dir/mcoplib/ && source env.sh
 
 ## Release
-### Release 0.3.1
+### Release 0.4.0
 - add cv op kernel
-- support sglang 0.5.7 op 
+- support sglang 0.5.7 && 0.5.8 op 
 - optimize mcoplib project build 
 - support mxbench for auto test op kernel `s perfromance
 - support profiler tools check op kernel `s perfromance
-- support for vllm 0.14.0  op kernels
+- support for vllm 0.15.0  op kernels
 - support Project-customized op kernels
 - support k-transformer op kernels
 - support verl op kernels
 - support all of mcopZoo op kernels
+- support auto print and dump op input params by setting env
+- support auto build mxbench running env by shell script
+- support auto test torch/py/c op api by mxbench cmd
 
 ## Acknowledgment
 Show your appreciation to those who have contributed to the project.

@@ -24,6 +24,7 @@
 #include "../include/fused_add_layernorm_per_token_quant_padding_output.h"
 #include "../include/rms_norm_dynamic_per_token_quant.h"
 #include "../include/fused_moe_gate_deepseek.h"
+#include "../include/glm_attention_prepare.h"
 #include "gptq_marlin.h"
 #include "fused_moe_gate_opt.h"
 
@@ -51,6 +52,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("scale_dynamic_quant", &scale_dynamic_quant);
     m.def("rotary_pos_emb_forward", &rotary_pos_emb_forward);
     m.def("rotary_pos_emb_backward", &rotary_pos_emb_backward);
+    m.def("FusedAttentionPrepare", &FusedAttentionPrepare);
     m.def("fused_add_rms_norm_dynamic_per_token_quant_padding_output", &add_rms_norm_dynamic_per_token_quant_padding_output);
     m.def("rms_norm_dynamic_per_token_quant_custom", &rms_norm_dynamic_per_token_quant_custom);
     
