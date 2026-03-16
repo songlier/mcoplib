@@ -8,9 +8,11 @@ docker run  -it  --name=mcoplib-build  --shm-size 16384m --device=/dev/dri --dev
 安装编译依赖：
 ```shell
 #安装cmake, 注意：如果是镜像中编译，又是把代码放在到网络共享盘中的，则先需要切换到root用户，在root用户下安装cmake
-pip3 install cmake==3.30.4 && pip3 install setuptools-scm==8.0
-pip3 install pybind11 
+pip3 install cmake==3.26.3
+#安装pybind11
+pip3 install pybind11
 pip3 install build
+pip3 install setuptools-scm==8.0
 ```
 环境变量设置：
 
@@ -95,7 +97,7 @@ root@lt-srv-10-2-182-63:~/mcoplib# tree
 dpkg -i mcoplib_cv-0.2.0-Linux.deb
 #切换到源码目录（~/mcOplib/gerrit_mcoplib/mcoplib_dev/mcoplib）, 执行一下命令
 source env.sh
-cd  ~/mcOplib/gerrit_mcoplib/mcoplib_dev/mcoplib/unit_test/cpp
+cd  /path/source/code/dir/mcoplib/unit_test/cpp
 mkdir build
 cmake_maca .. && make_maca
 ```
@@ -126,6 +128,117 @@ export BUILD_LMDEPLOY_SUBMODULE=OFF
 export BUILD_DEFAULT_OP_SUBMODULE=OFF 
 #多个算子编译模块控制
 export BUILD_VLLM_SUBMODULE=OFF  BUILD_SGLANG_SUBMODULE=OFF BUILD_LMDEPLOY_SUBMODULE=OFF
+```
+
+## 动态控制算子入参信息终端输出或参数dump到本地磁盘
+```shell
+#开启算子入参信息输出到终端（包括数据类型，shape 等信息）
+export MCOP_DEBUG_TRACE=1
+# 启用 dump
+export MCOP_DEBUG_PARAMS_DUMP=1
+
+# （可选）配置采样数量
+export MCOP_TENSOR_DUMP_SAMPLE_SIZE=20
+# 或 dump 所有 tensor 数据（可选）
+export MCOP_TENSOR_DUMP_FULL=1
+```
+### 算子入参Dump本地示例
+
+```json
+{
+  "function": "fused_moe_gate_deepseek",
+  "parameters": [
+    {
+      "name": "gating_outputs",
+      "type": "at::Tensor",
+      "dtype": "Half",
+      "shape": "[16, 448]",
+      "value": "[0.480469, 0.894531, 0.0356445, 0.0322266, 0.498047, 0.899902, 0.887207, 0.763672, 0.192871, 0.271484, ..., 0.730469, 0.484375, 0.0517578, 0.4375, 0.507812, 0.979492, 0.42041, 0.184082, 0.825195, 0.395508] (showing 20 of 7168 elements, set MCOP_TENSOR_DUMP_FULL=1 for all) [data_ptr=0x7f43fbc00000]",
+      "bytes": 14336
+    },
+    {
+      "name": "correction_bias",
+      "type": "at::Tensor",
+      "dtype": "Half",
+      "shape": "[448]",
+      "value": "[0.0732422, 0.508789, 0.522461, 0.0961914, 0.373535, 0.535645, 0.0454102, 0.862305, 0.300781, 0.5625, ..., 0.757324, 0.407227, 0.803711, 0.134766, 0.777344, 0.895996, 0.731445, 0.388184, 0.0571289, 0.395996] (showing 20 of 448 elements, set MCOP_TENSOR_DUMP_FULL=1 for all) [data_ptr=0x7f43fbc03800]",
+      "bytes": 896
+    },
+    {
+      "name": "out_routing_weights",
+      "type": "at::Tensor",
+      "dtype": "Float",
+      "shape": "[16, 8]",
+      "value": "[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ..., 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] (showing 20 of 128 elements, set MCOP_TENSOR_DUMP_FULL=1 for all) [data_ptr=0x7f43fbc03c00]",
+      "bytes": 512
+    },
+    {
+      "name": "out_selected_experts",
+      "type": "at::Tensor",
+      "dtype": "Int",
+      "shape": "[16, 8]",
+      "value": "[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ..., 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] (showing 20 of 128 elements, set MCOP_TENSOR_DUMP_FULL=1 for all) [data_ptr=0x7f43fbc03e00]",
+      "bytes": 512
+    },
+    {
+      "name": "topk",
+      "type": "int",
+      "dtype": "int",
+      "shape": "[]",
+      "value": "8",
+      "bytes": 4
+    },
+    {
+      "name": "renormalize",
+      "type": "bool",
+      "dtype": "bool",
+      "shape": "[]",
+      "value": "1",
+      "bytes": 1
+    },
+    {
+      "name": "num_expert_group",
+      "type": "int",
+      "dtype": "int",
+      "shape": "[]",
+      "value": "1",
+      "bytes": 4
+    },
+    {
+      "name": "topk_group",
+      "type": "int",
+      "dtype": "int",
+      "shape": "[]",
+      "value": "1",
+      "bytes": 4
+    },
+    {
+      "name": "num_fused_shared_experts",
+      "type": "std::optional<int>",
+      "dtype": "int",
+      "shape": "[]",
+      "value": "nullopt",
+      "bytes": 0
+    },
+    {
+      "name": "routed_scaling_factor",
+      "type": "std::optional<float>",
+      "dtype": "float",
+      "shape": "[]",
+      "value": "5.5",
+      "bytes": 4
+    },
+    {
+      "name": "moegate_type",
+      "type": "std::optional<int>",
+      "dtype": "int",
+      "shape": "[]",
+      "value": "0",
+      "bytes": 4
+    }
+  ]
+}
+
 ```
 
 ## Getting started
@@ -276,19 +389,25 @@ def fused_mla_normal_rotary_emb(
     Answer: 这是因为构建环境中没有安装git命令导致的，请在构建环境中安装git命令
 - 编译时出现错误：FileNotFoundError: [Errno 2] No such file or directory: 'cmake_maca'
     Answer: 请在编译前执行下环境变量env.sh，cd /code/dir/mcoplib/ && source env.sh
+- 编译时报错：cmake error while loading shared libraries: libssl.so.1.1: cannot open shared object file: No such file or directory
+Traceback (most recent call last):
+    Answer: cmake版本太高，请安装低版本，镜像中的open-ssl版本很低与高版本的cmake无法匹配，所有报错，请卸载高版本cmake，安装低版本的cmake，pip3 install cmake==3.26.3
 
 ## Release
-### Release 0.2.0
+### Release 0.4.0
 - add cv op kernel
-- support sglang 0.5.7 op 
+- support sglang 0.5.7 && 0.5.8 op 
 - optimize mcoplib project build 
 - support mxbench for auto test op kernel `s perfromance
 - support profiler tools check op kernel `s perfromance
-- support for vllm 0.11.2  op kernels
+- support for vllm 0.15.0  op kernels
 - support Project-customized op kernels
 - support k-transformer op kernels
 - support verl op kernels
 - support all of mcopZoo op kernels
+- support auto print and dump op input params by setting env
+- support auto build mxbench running env by shell script
+- support auto test torch/py/c op api by mxbench cmd
 
 ## Acknowledgment
 Show your appreciation to those who have contributed to the project.

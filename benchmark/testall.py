@@ -26,8 +26,8 @@ IGNORE_OPS = [
     "copy_blocks",
     "copy_blocks_mla",
     "indexer_k_cache",
-    "mctlass_fused_moe_kernel_w4a16",
-    "cp_gather_indexer_k_cache"
+    "cp_gather_indexer_k_cache",
+    "mctlass_fused_moe_kernel_w4a16"
 ]
 # =================================================
 

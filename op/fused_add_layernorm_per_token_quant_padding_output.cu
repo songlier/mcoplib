@@ -1,4 +1,4 @@
-// Copyright (c) 2025 MetaX Integrated Circuits (Shanghai) Co., Ltd. All rights reserved.
+// 2025 - Modified by MetaX Integrated Circuits (Shanghai) Co., Ltd. All Rights Reserved.
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <torch/all.h>
@@ -372,6 +372,26 @@ void add_rms_norm_dynamic_per_token_quant_padding_output_with_dispatch(torch::Te
     if (hidden_size == 7168) {
         MOE_DISPATCH_QUANT_TYPES(output.scalar_type(), "add_rms_norm_quant_padding_output_opt_kernel", [&] {
             vllm::add_rms_norm_quant_padding_output_opt_kernel<scalar_in_t, scalar_t, VPT, 7168 / VPT, block_d>
+                <<<num_tokens, block_d, 0, stream>>>(
+                    output.data_ptr<scalar_t>(), out_rms.data_ptr<scalar_in_t>(), output_quant_int8.data_ptr<scalar_t>(), 
+                    out_scales.data_ptr<float>(), input.data_ptr<scalar_in_t>(), 
+                    residual.data_ptr<scalar_in_t>(), weight.data_ptr<scalar_in_t>(),
+                    var_epsilon, min_scaling_factor, hidden_size, pad_size, num_tokens
+                );
+        });
+    }  else if (hidden_size == 5120) {
+        MOE_DISPATCH_QUANT_TYPES(output.scalar_type(), "add_rms_norm_quant_padding_output_opt_kernel", [&] {
+            vllm::add_rms_norm_quant_padding_output_opt_kernel<scalar_in_t, scalar_t, VPT, 5120 / VPT, block_d>
+                <<<num_tokens, block_d, 0, stream>>>(
+                    output.data_ptr<scalar_t>(), out_rms.data_ptr<scalar_in_t>(), output_quant_int8.data_ptr<scalar_t>(), 
+                    out_scales.data_ptr<float>(), input.data_ptr<scalar_in_t>(), 
+                    residual.data_ptr<scalar_in_t>(), weight.data_ptr<scalar_in_t>(),
+                    var_epsilon, min_scaling_factor, hidden_size, pad_size, num_tokens
+                );
+        });
+    } else if (hidden_size == 6144){
+        MOE_DISPATCH_QUANT_TYPES(output.scalar_type(), "add_rms_norm_quant_padding_output_opt_kernel", [&] {
+            vllm::add_rms_norm_quant_padding_output_opt_kernel<scalar_in_t, scalar_t, VPT, 6144 / VPT, block_d>
                 <<<num_tokens, block_d, 0, stream>>>(
                     output.data_ptr<scalar_t>(), out_rms.data_ptr<scalar_in_t>(), output_quant_int8.data_ptr<scalar_t>(), 
                     out_scales.data_ptr<float>(), input.data_ptr<scalar_in_t>(), 

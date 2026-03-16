@@ -93,15 +93,13 @@ def reference_moe_with_padding(A: torch.Tensor, B: torch.Tensor,
 
 
 def test_invoke_fused_moe_kernel_only():
-    print("=== invoke_fused_moe_kernel final test ===")
+    print("=== invoke_fused_moe_triton_kernel final test ===")
     print(f"Device: {DEVICE}; dtype: {DTYPE}")
     print(f"Scaled shapes: M={M}, K={K}, N={N}, E={E}, TOP_K={TOP_K}")
 
     # import module object robustly
 
 
-    # import the function under test
-    from vllm_metax.model_executor.layers.fused_moe.fused_moe import invoke_fused_moe_kernel
     from vllm.model_executor.layers.fused_moe.moe_align_block_size import moe_align_block_size  # still OK
 
     # Prepare tensors
