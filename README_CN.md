@@ -8,9 +8,11 @@ docker run  -it  --name=mcoplib-build  --shm-size 16384m --device=/dev/dri --dev
 安装编译依赖：
 ```shell
 #安装cmake, 注意：如果是镜像中编译，又是把代码放在到网络共享盘中的，则先需要切换到root用户，在root用户下安装cmake
-pip3 install cmake==3.30.4 && pip3 install setuptools-scm==8.0
-pip3 install pybind11 
+pip3 install cmake==3.26.3
+#安装pybind11
+pip3 install pybind11
 pip3 install build
+pip3 install setuptools-scm==8.0
 ```
 环境变量设置：
 
@@ -39,6 +41,16 @@ python setup.py build_ext --inplace
 export WCUDA_DEBUG=1
 ```
 note: 通过pip install -e . --no-build-isolation -v或者-vv, -vvv命令编译时， 并不会打印出setup.py中的print信息，因为pip 对该子进程使用管道（pipe）捕获 stdout/stderr，以便在失败时回显或在 verbose 模式下合并显示， 也即只有在编译失败时或者编译成功完成后才会打印出setup.py中的print信息
+
+CUTLASS OP API接口编译控制
+```shell
+#默认开启CUTLASS OP API的编译
+#也可以通过环境变量来控制CUTLASS OP 的编译
+#开启
+export ENABLE_BUILD_CUTLASS_OP=1
+#关闭
+export ENABLE_BUILD_CUTLASS_OP=0
+```
 
 项目打包命令：
 
@@ -95,7 +107,7 @@ root@lt-srv-10-2-182-63:~/mcoplib# tree
 dpkg -i mcoplib_cv-0.2.0-Linux.deb
 #切换到源码目录（~/mcOplib/gerrit_mcoplib/mcoplib_dev/mcoplib）, 执行一下命令
 source env.sh
-cd  ~/mcOplib/gerrit_mcoplib/mcoplib_dev/mcoplib/unit_test/cpp
+cd  /path/source/code/dir/mcoplib/unit_test/cpp
 mkdir build
 cmake_maca .. && make_maca
 ```
@@ -278,17 +290,20 @@ def fused_mla_normal_rotary_emb(
     Answer: 请在编译前执行下环境变量env.sh，cd /code/dir/mcoplib/ && source env.sh
 
 ## Release
-### Release 0.2.0
+### Release 0.4.0
 - add cv op kernel
-- support sglang 0.5.7 op 
+- support sglang 0.5.7 && 0.5.8 op 
 - optimize mcoplib project build 
 - support mxbench for auto test op kernel `s perfromance
 - support profiler tools check op kernel `s perfromance
-- support for vllm 0.11.2  op kernels
+- support for vllm 0.14.0  op kernels
 - support Project-customized op kernels
 - support k-transformer op kernels
 - support verl op kernels
 - support all of mcopZoo op kernels
+- support auto print and dump op input params by setting env
+- support auto build mxbench running env by shell script
+- support auto test torch/py/c op api by mxbench cmd
 
 ## Acknowledgment
 Show your appreciation to those who have contributed to the project.

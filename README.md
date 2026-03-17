@@ -8,9 +8,12 @@ docker run  -it  --name=mcoplib-build  --shm-size 16384m --device=/dev/dri --dev
 Install build dependencies:
 ```shell
 # Install cmake. Note: If compiling inside a container and the code is stored on a network shared drive, you must first switch to the root user and install cmake as root.
-pip3 install cmake==3.30.4 && pip3 install setuptools-scm==8.0
+pip3 install cmake==3.26.3
+# Install pybind11
 pip3 install pybind11
 pip3 install build
+pip3 install setuptools-scm==8.0
+
 ```
 Environment variable setup:
 
@@ -39,7 +42,17 @@ export WCUDA_DEBUG=1
 ```
 note: When compiling using the pip install -e . --no-build-isolation -v (or -vv, -vvv) command, print messages within setup.py will not be printed immediately. This is because pip uses a pipe to capture stdout/stderr from the subprocess in order to echo it upon failure or merge the display in verbose mode. Therefore, print messages from setup.py will only be displayed after compilation fails or completes successfully.
 
-Project Packaging Command:
+CUTLASS OP API interface compilation control
+```shell
+#The compilation of CUTLASS OP API is enabled by default 
+#The compilation of CUTLASS OP can also be controlled through environment variables 
+#Enable
+export ENABLE_BUILD_CUTLASS_OP=1
+#Disable
+export ENABLE_BUILD_CUTLASS_OP=0
+```
+
+Project packaging command:
 
 ```shell
 # First set environment variables
@@ -279,9 +292,9 @@ def fused_mla_normal_rotary_emb(
     Answer: Please execute the environment variable script env.sh before compiling: cd /code/dir/mcoplib/ && source env.sh
 
 ## Release
-### Release 0.3.1
+### Release 0.4.0
 - add cv op kernel
-- support sglang 0.5.7 op 
+- support sglang 0.5.7 && 0.5.8 op 
 - optimize mcoplib project build 
 - support mxbench for auto test op kernel `s perfromance
 - support profiler tools check op kernel `s perfromance
@@ -290,6 +303,9 @@ def fused_mla_normal_rotary_emb(
 - support k-transformer op kernels
 - support verl op kernels
 - support all of mcopZoo op kernels
+- support auto print and dump op input params by setting env
+- support auto build mxbench running env by shell script
+- support auto test torch/py/c op api by mxbench cmd
 
 ## Acknowledgment
 Show your appreciation to those who have contributed to the project.

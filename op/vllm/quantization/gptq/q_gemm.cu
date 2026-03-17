@@ -1791,7 +1791,7 @@ bool launch_gemm_gptq(int m, int n, int k, int quant_group, const input_tp* dA,
                       int lda, const quant_packed_tp* dB, int ldb,
                       output_tp* dC, float* dC_temp, int ldc,
                       quant_packed_tp* d_zeros, input_tp* d_scales,
-                      const cudaStream_t stream, int chunks = 1) {
+                      const cudaStream_t stream, int chunks = 1, int max_blocks_m=4) {
   using namespace hgemm_marlin_gptq;
   if (n % 16 != 0) {
     printf("n %% 16 != 0, n = %d\n", n);
@@ -1804,11 +1804,11 @@ bool launch_gemm_gptq(int m, int n, int k, int quant_group, const input_tp* dA,
   // const vllm::ScalarTypeId w_type_id = vllm::kU4B8.id();
   const int THREADS = 256;
   int BLOCKS_M = div_ceil(m, SLICE_M);
-  if (BLOCKS_M >= MAX_BLOCKS_M && BLOCKS_M % MAX_BLOCKS_M != 0) {
+  if (BLOCKS_M >= max_blocks_m && BLOCKS_M % max_blocks_m != 0) {
     printf("Error: input m is error, m = %d, blocks_m = %d\n", m, BLOCKS_M);
     return false;
   }
-  if (BLOCKS_M > MAX_BLOCKS_M) BLOCKS_M = MAX_BLOCKS_M;
+  if (BLOCKS_M > max_blocks_m) BLOCKS_M = max_blocks_m;
   int BLOCKS_N = 8;
   // int BLOCKS_K = 4;
   // It is better let TILE_K = quant_group
@@ -1855,7 +1855,8 @@ bool launch_gemm_gptq(int m, int n, int k, int quant_group, const input_tp* dA,
   LAUNCH_GPTQ(256, 1, 16, bk, has_act_order, has_zp, has_nk_pred, has_m_pred) \
   LAUNCH_GPTQ(256, 2, 16, bk, has_act_order, has_zp, has_nk_pred, has_m_pred) \
   LAUNCH_GPTQ(256, 3, 8, bk, has_act_order, has_zp, has_nk_pred, has_m_pred)  \
-  LAUNCH_GPTQ(256, 4, 8, bk, has_act_order, has_zp, has_nk_pred, has_m_pred)
+  LAUNCH_GPTQ(256, 4, 8, bk, has_act_order, has_zp, has_nk_pred, has_m_pred) \
+  LAUNCH_GPTQ(256, 8, 8, bk, has_act_order, has_zp, has_nk_pred, has_m_pred)
 
 #define LAUNCH_GPTQ_ZP(has_zp, has_nk_pred, has_m_pred)    \
   LAUNCH_GPTQ_K(1, false, has_zp, has_nk_pred, has_m_pred) \
@@ -1940,6 +1941,43 @@ bool launch_gemm(int m, int n, int k, int quant_group, const input_tp* dA,
   }
   const input_tp* dA_actual = (g_idx != nullptr ? perm_space : dA);
   bool ret = true;
+
+  // if(m >= 128 && m != 19 && m != 760) {
+  //   int chunks = total_m_blocks / 8;
+  //   int rest_blocks_m = total_m_blocks % 8;
+
+  //   if (chunks > 0) {
+  //       int real_m = m > chunks * 8 * SLICE_M ? chunks * 8 * SLICE_M : m;
+  //       if (is_gptq) {
+  //           ret = launch_gemm_gptq<input_tp, w_type_id, output_tp, quant_packed_tp>(real_m, n, k, quant_group, dA_actual, lda, dB, ldb, dC, dC_temp, ldc, d_zeros,
+  //           d_scales, stream, chunks, 8);
+  //       }
+  //   }
+  //   if (rest_blocks_m > 0) {
+  //       int m_offset = chunks * 8 * SLICE_M;
+  //       if (is_gptq) {
+  //           int chunks1 = rest_blocks_m / MAX_BLOCKS_M;
+  //           int rest_blocks_m1 = rest_blocks_m % MAX_BLOCKS_M;
+
+  //           if (chunks1 > 0) {
+  //               int real_m = rest_blocks_m > chunks1 * MAX_BLOCKS_M * SLICE_M ? chunks1 * MAX_BLOCKS_M * SLICE_M : rest_blocks_m;
+  //               if (is_gptq) {
+  //                   ret = ret && launch_gemm_gptq<input_tp, w_type_id, output_tp, quant_packed_tp>(real_m, n, k, quant_group, dA_actual + lda * m_offset, lda, dB, ldb, dC + ldc * m_offset, 
+  //                       dC_temp + ldc * m_offset, ldc, d_zeros, d_scales, stream, chunks1, MAX_BLOCKS_M);
+  //               }
+  //           }
+  //           if (rest_blocks_m1 > 0) {
+  //               m_offset += chunks1 * MAX_BLOCKS_M * SLICE_M;
+  //               if (is_gptq) {
+  //                   ret = ret && launch_gemm_gptq<input_tp, w_type_id, output_tp, quant_packed_tp>(m - m_offset, n, k, quant_group, dA_actual + lda * m_offset, lda, dB, ldb, dC + ldc * m_offset, 
+  //                       dC_temp + ldc * m_offset, ldc, d_zeros, d_scales, stream, 1, MAX_BLOCKS_M);
+  //               }
+  //           }
+  //       }
+  //   }
+  //   return ret;
+  // }
+
   if (chunks > 0) {
     int real_m = m > chunks * MAX_BLOCKS_M * SLICE_M
                      ? chunks * MAX_BLOCKS_M * SLICE_M
@@ -1947,7 +1985,7 @@ bool launch_gemm(int m, int n, int k, int quant_group, const input_tp* dA,
     if (is_gptq) {
       ret = launch_gemm_gptq<input_tp, w_type_id, output_tp, quant_packed_tp>(
           real_m, n, k, quant_group, dA_actual, lda, dB, ldb, dC, dC_temp, ldc,
-          d_zeros, d_scales, stream, chunks);
+          d_zeros, d_scales, stream, chunks, MAX_BLOCKS_M);
     }
   }
   if (rest_blocks_m > 0) {
@@ -1957,10 +1995,10 @@ bool launch_gemm(int m, int n, int k, int quant_group, const input_tp* dA,
             launch_gemm_gptq<input_tp, w_type_id, output_tp, quant_packed_tp>(
                 m - m_offset, n, k, quant_group, dA_actual + lda * m_offset,
                 lda, dB, ldb, dC + ldc * m_offset, dC_temp, ldc, d_zeros,
-                d_scales, stream, 1);
+                d_scales, stream, 1, MAX_BLOCKS_M);
     }
   }
-
+  
   return ret;
 }
 

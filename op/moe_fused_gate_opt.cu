@@ -40,6 +40,9 @@ int64_t fused_moe_gate_opt(
         }
         cudaMemcpy(d_shared_experts_ids, shared_experts_ids, 512 * sizeof(int), cudaMemcpyHostToDevice);
     }
+    c10::ScalarType type = gating_outputs.scalar_type();
+    c10::ScalarType type_bias =  correction_bias.scalar_type();
+    printf("Tensor type: %s type_bias:%s\n", c10::toString(type), c10::toString(type_bias));
 
 #define LAUNCH_MOE_GATE(NUM_SHARED_EXPERTS, NUM_EXPERTS, NUM_EXPERT_GROUP, TOPK_GROUP, TOPK) \
     else if (num_shared_experts == NUM_SHARED_EXPERTS && num_expert_group == NUM_EXPERT_GROUP && topk_group == TOPK_GROUP && num_experts == NUM_EXPERTS) { \

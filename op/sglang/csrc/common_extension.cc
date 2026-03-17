@@ -688,6 +688,13 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
 
   m.def("mx_awq_dequantize(Tensor out, Tensor _scaling_factors, Tensor _zeros, int split_k_iter, int thx, int thy) -> Tensor");
   m.impl("mx_awq_dequantize", torch::kCUDA, &mx_awq_dequantize);
+
+
+  m.def(
+     "per_token_cast_to_fp8("
+      "   Tensor! out, Tensor! scale, "
+      "   Tensor input) -> ()");
+  m.impl("per_token_cast_to_fp8", torch::kCUDA, &per_token_cast_to_fp8);
   m.def(
       "timestep_embedding(Tensor input,"
       "Tensor output,"
@@ -696,8 +703,7 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
       "float downscale_freq_shift,"
       "float scale,"
       "int max_period) -> Tensor");
-  m.impl("timestep_embedding", torch::kCUDA, &timestep_embedding);
-
+  m.impl("timestep_embedding", torch::kCUDA, &timestep_embedding);  
 }
 
 REGISTER_EXTENSION(common_ops)

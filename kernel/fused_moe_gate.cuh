@@ -25,8 +25,9 @@ __device__ __forceinline__ float scalar2float(scalar_t val) {
     }
     else if constexpr (std::is_same_v<scalar_t, nv_bfloat16> || std::is_same_v<scalar_t, at::BFloat16>) {
         return static_cast<float>(val);
-    }
-    else {
+    }else if constexpr (std::is_same_v<scalar_t, float> ) {
+        return val;
+    } else {
         if((threadIdx.x == 0) && (blockIdx.x == 0)){
             printf("unsupported scalar type. %s %d\n", __func__, __LINE__);
         } 
@@ -39,7 +40,10 @@ __device__ __forceinline__ scalar_t float2scalar(float val) {
         return __float2half(val);
     } else if constexpr (std::is_same_v<scalar_t, nv_bfloat16> || std::is_same_v<scalar_t, at::BFloat16>) {
         return __float2bfloat16_rn(val);
-    } else {
+    } else if constexpr (std::is_same_v<scalar_t, float> ) {
+        return val;
+    } 
+    else {
         if((threadIdx.x == 0) && (blockIdx.x == 0)){
             printf("unsupported scalar type. %s %d\n", __func__, __LINE__);
         }
@@ -256,7 +260,7 @@ template<class scalar_t>
         int wave_lane = tid % WAVE_SIZE;
         int wave_idx = tid / WAVE_SIZE;
         scalar_t idx_and_weight[2]; //Stores weight and index for further top1
-
+        
         if (tid < NUM_EXPERTS) {
             float fw = scalar2float<scalar_t>(w[tid]);
             scalar_t fw_sim = float2scalar<scalar_t>(__builtin_rcpf((1.0f + __expf(-fw))));
@@ -264,8 +268,8 @@ template<class scalar_t>
             idx_and_weight[0] = fw_bf16;
             global_score[tid] = fw_sim; // 只有有效线程才能写入 Shared Memory
         } else {
-            // 对于补齐的虚拟线程，赋予极小值，确保排序后在最后面
-            idx_and_weight[0] = -INFINITY; // -inf
+            // 对于补充的虚拟线程，赋予极小值，确保排序后在最后面
+            idx_and_weight[0] =  -INFINITY;// -inf
             // global_score 不需要写，因为 Phase 2 只会读取 TopK 的索引
         }
 
@@ -282,16 +286,19 @@ template<class scalar_t>
         //And do descending sort
         warpSortDescending<scalar_t, 64, 0xffffffffffffffff>(idx_and_weight, tid);
 
+
+
         __shared__ scalar_t max_cache[64][2];
         int offset = wave_lane + wave_idx * TOPK;
-        if (wave_lane < TOPK) {
+        if (wave_lane < TOPK ) {
             if constexpr (std::is_same_v<scalar_t, float>) {
                 max_cache[offset][0] = idx_and_weight[0];
-                *((uint32_t *)&max_cache[offset][1]) = *((uint32_t *)&idx_and_weight[1]);
+                *((uint32_t*)&max_cache[offset][1]) = *((uint32_t*)&idx_and_weight[1]);
             }
-            else {
+            else{
                 ((float*)(max_cache))[offset] = *(float*)idx_and_weight;
             }
+                
         }
 
         // 对于160专家: (160+64-1)/64 = 3, 3*8 = 24
@@ -306,12 +313,33 @@ template<class scalar_t>
             else
                 ((float*)(max_cache))[wave_lane] = *(float*)idx_and_weight;
         }
-
+   
         __syncthreads();
+              // 打印 max_cache 所有内容（只打印一次，避免刷屏）
+        // if (tid == 0 && (blockIdx.x == 0)) {
+        //     printf("\n========== max_cache 内容 (blockIdx.x=%d) ==========\n", blockIdx.x);
+        //     for (int i = 0; i < 64; i++) {
+        //         float weight;
+        //         int idx;
+        //         if constexpr (std::is_same_v<scalar_t, float>) {
+        //             weight = scalar2float<scalar_t>(max_cache[i][0]);
+        //             idx = *((int32_t*)&max_cache[i][1]);
+        //         } else {
+        //             float temp = ((float*)(max_cache))[i];
+        //             weight = scalar2float<scalar_t>(((scalar_t*)(&temp))[0]);
+        //             idx = ((int32_t*)(&temp))[0] >> 16;
+        //         }
+        //         if (i < topks_in_block || weight > -1000.0f) {  // 只打印有效候选
+        //             printf("max_cache 内容  i: [%2d] weight=%.6f, idx=%d\n", i, weight, idx);
+        //         }
+        //     }
+        //     printf("====================================================\n\n");
+        // }
+
 
         //We get NUM_EXPERTS/WAVE_SIZE*TOPK experts&weights
         //Sort NUM_EXPERTS/WAVE_SIZE*TOPK elements in 1 wave
-        int top_k_idx = 0;
+        int top_k_idx = -1;
         if (wave_idx == 0) {
             if constexpr (std::is_same_v<scalar_t, float>) {
                 idx_and_weight[0] = max_cache[wave_lane][0];
@@ -321,13 +349,38 @@ template<class scalar_t>
                 *(float*)idx_and_weight = ((float*)(max_cache))[wave_lane];
             __syncthreads();
             warpSortDescending<scalar_t, 64, 0xffffffffffffffff>(idx_and_weight, tid);
-            //Now all values are stored into shared max_experts
+            // 打印排序后的 idx_and_weight 内容（只打印一次，避免刷屏）
+            // if (tid == 0 && (blockIdx.x == 0) ) {
+            //     printf("idx_and_weight Wave 0 中的64个线程进行全局排序后的结果:\n");
+            //     for (int i = 0; i < 64; i++) {
+            //         float weight;
+            //         int idx;
+            //         // 由于所有线程都执行了排序，我们需要从某个线程获取值
+            //         // 这里使用 shfl 来从其他线程获取值
+            //         if constexpr (std::is_same_v<scalar_t, float>) {
+            //             int remote_idx;
+            //             float remote_weight = __shfl_sync(0xffffffff, idx_and_weight[0], i);
+            //             remote_idx = __shfl_sync(0xffffffff, *((int32_t*)&idx_and_weight[1]), i);
+            //             weight = remote_weight;
+            //             idx = remote_idx;
+            //         } else {
+            //             int32_t remote_val = __shfl_sync(0xffffffff, *(int32_t*)idx_and_weight, i);
+            //             float temp = *(float*)&remote_val;
+            //             weight = scalar2float<scalar_t>(((scalar_t*)(&temp))[0]);
+            //             idx = remote_val >> 16;
+            //         }
+            //         if (i < TOPK || weight > -1000.0f) {  // 只打印有效候选（TopK + 非-inf值）
+            //             printf("  [tid=%2d] weight=%.6f, idx=%d\n", i, weight, idx);
+            //         }
+            //     }
+            //     printf("=============================================================\n\n");
+            // }
+            //Now all values are stored into shared_max_experts
             if constexpr (std::is_same_v<scalar_t, float>)
                 top_k_idx = *((int32_t*)&idx_and_weight[1]);
             else
                 top_k_idx = ((int32_t*)idx_and_weight)[tid] >> 16;
         }
-
         return top_k_idx;
     }
 
@@ -372,51 +425,14 @@ template<class scalar_t>
         for (int offset = 8; offset > 0; offset >>= 1) {
             top_k_sum += __shfl_xor_sync(0x0000ffff, top_k_sum, offset);
         }
-
         if (tid < TOPK){
             if constexpr (NUM_SHARED_EXPERTS > 0) {
-                if(tid == (TOPK - 1)) {
-                    // 共享专家的权重 = (sum of routed weights) / routed_scaling_factor
-                    // 修复：不要在这里对共享专家进行任何操作，直接设为0
-                    // 后面会重新计算并设置正确的值
-                    top_k_sigmoid = 0.f;
-                } else {
-                    // 路由专家：先归一化到sum=1.0
-                    if (renormalize)
-                        top_k_sigmoid = scalar2float<scalar_t>(float2scalar<scalar_t>(top_k_sigmoid) / float2scalar<scalar_t>(top_k_sum));
-                }
-            } else {
-                // 无共享专家：直接归一化
-                if (renormalize)
-                    top_k_sigmoid = scalar2float<scalar_t>(float2scalar<scalar_t>(top_k_sigmoid) / float2scalar<scalar_t>(top_k_sum));
+                if(tid == (TOPK - 1))
+                    top_k_sigmoid = scalar2float<scalar_t>(float2scalar<scalar_t>(top_k_sum) * float2scalar<scalar_t>(scale_factor));
             }
+            if (renormalize)
+                top_k_sigmoid = scalar2float<scalar_t>(float2scalar<scalar_t>(top_k_sigmoid) / float2scalar<scalar_t>(top_k_sum));
             topk_w[tid] = top_k_sigmoid;
-        }
-
-        // 共享专家的权重计算和归一化逻辑
-        //   1. 归一化路由专家（不包括共享专家）
-        //   2. 共享专家权重 = sum(routed) / routed_scaling_factor
-        //   3. 不再进行第二次归一化！
-        //
-        //   - 归一化基数只包含路由专家，不包含共享专家
-        //   - 共享专家的权重 = normalized_sum / routed_scaling_factor
-        //   - 最终权重和 = 1.0 (routed) + shared_weight（可能>1.0）
-        if constexpr (NUM_SHARED_EXPERTS > 0) {
-            // 第一步：重新计算归一化后的路由专家和（应该等于1.0）
-            if (tid < TOPK) {
-                top_k_sum = topk_w[tid];
-            } else {
-                top_k_sum = 0.f;
-            }
-            for (int offset = 8; offset > 0; offset >>= 1) {
-                top_k_sum += __shfl_xor_sync(0x0000ffff, top_k_sum, offset);
-            }
-
-            // 第二步：设置共享专家的权重 = normalized_sum / routed_scaling_factor
-            // 注意：这里不再进行第二次归一化！
-            if (tid == (TOPK - 1) && renormalize) {
-                topk_w[tid] = top_k_sum * scale_factor;  // scale_factor = 1.0 / routed_scaling_factor
-            }
         }
     }
 
@@ -434,6 +450,7 @@ template<class scalar_t>
         int top_k_idx = 0;
         if constexpr (NUM_GROUPS == 1) {
             top_k_idx = moe_topk_1group_block_phase1<scalar_t, NUM_EXPERTS, 1, TOPK>(w + bdx * NUM_EXPERTS, bias, global_score, tid);
+
         } else {
             top_k_idx = moe_topk_block_phase1<scalar_t>(w + bdx * NUM_EXPERTS, bias, global_score, tid);
         }
@@ -454,6 +471,9 @@ template<class scalar_t>
         int top_k_idx = 0;
         if constexpr (NUM_GROUPS == 1) {
             top_k_idx = moe_topk_1group_block_phase1<scalar_t, NUM_EXPERTS, 1, TOPK>(w + bdx * NUM_EXPERTS, bias, global_score, tid);
+            // if(bdx == 0) {
+            //     printf("fused_topk Info: tid=%d, top_k_idx =%d, \n", tid, top_k_idx);
+            // }
         } else {
             top_k_idx = moe_topk_block_phase1<scalar_t>(w + bdx * NUM_EXPERTS, bias, global_score, tid);
         }
