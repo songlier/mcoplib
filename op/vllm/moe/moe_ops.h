@@ -36,14 +36,15 @@ void moe_lora_align_block_size(
     torch::Tensor sorted_token_ids, torch::Tensor expert_ids,
     torch::Tensor num_tokens_post_pad, torch::Tensor adapter_enabled,
     torch::Tensor lora_ids,std::optional<torch::Tensor> maybe_expert_map);
-    
-std::tuple<torch::Tensor, torch::Tensor> grouped_topk(
-    torch::Tensor const& scores, int64_t n_group, int64_t topk_group,
-    int64_t topk, bool renormalize, double routed_scaling_factor,
-    torch::Tensor const& bias, int64_t scoring_func);
+
 
 bool moe_permute_unpermute_supported();
 
 void shuffle_rows(const torch::Tensor& input_tensor,
                   const torch::Tensor& dst2src_map,
                   torch::Tensor& output_tensor);
+
+std::tuple<torch::Tensor, torch::Tensor> grouped_topk(
+    torch::Tensor const& scores, int64_t n_group, int64_t topk_group,
+    int64_t topk, bool renormalize, double routed_scaling_factor,
+    torch::Tensor const& bias, int64_t scoring_func);

@@ -2,7 +2,6 @@
 
 #include <optional>
 #include <torch/library.h>
-#include <tuple>
 
 #include "core/scalar_type.hpp"
 

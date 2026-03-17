@@ -14,7 +14,8 @@ import argparse
 from datetime import datetime
 from typing import Any, Dict, List, Tuple, TypedDict
 import vllm_metax.patch
-from mcoplib.triton_fused_moe import vllm_invoke_fused_moe_kernel as vllm_invoke_fused_moe_kernel
+from mcoplib.triton_fused_moe import invoke_fused_moe_triton_kernel
+from mcoplib.triton_fused_moe import invoke_fused_moe_wna16_triton_kernel 
 
 # ---- parameters (DeepSeek-R1 ratios, scaled down for safety) ----
 SCALE = float(os.environ.get("DEEPSEEK_UNITTEST_SCALE", "1.0"))
@@ -102,7 +103,6 @@ def test_invoke_fused_moe_kernel_only():
 
 
     # import the function under test
-    from vllm_metax.model_executor.layers.fused_moe.fused_moe import invoke_fused_moe_kernel
     from vllm.model_executor.layers.fused_moe.moe_align_block_size import moe_align_block_size  # still OK
 
     # Prepare tensors
@@ -198,21 +198,21 @@ def test_invoke_fused_moe_kernel_only():
     try:
         # Warmup runs
         for _ in range(WARMUP):
-            vllm_invoke_fused_moe_kernel(
+            
+            invoke_fused_moe_triton_kernel(
                 A, B, C,
-                A_scale, B_scale, B_zp,
+                A_scale, B_scale,
                 topk_weights,
                 sorted_token_ids, expert_ids,
                 num_tokens_post_padded,
                 mul_routed_weight,
                 TOP_K,
-                config={"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 32, "ACCF32":False, "SPLIT_K":1, "GROUP_SIZE_M":8},
+                config={"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 32, "SPLIT_K":1, "GROUP_SIZE_M":8},
                 compute_type=compute_type,
                 use_fp8_w8a8=False,
                 use_int8_w8a8=False,
                 use_int8_w8a16=False,
                 use_int4_w4a16=False,
-                orig_acc_dtype=torch.bfloat16,
                 per_channel_quant=False,
                 block_shape=None,
                 B_bias=B_bias,
@@ -228,21 +228,20 @@ def test_invoke_fused_moe_kernel_only():
         print(f"Single CPU call time: {cpu_us:.2f} us")
         # Time single CPU call (wall-clock)
         
-        vllm_invoke_fused_moe_kernel(
+        invoke_fused_moe_triton_kernel(
             A, B, C,
-            A_scale, B_scale, B_zp,
+            A_scale, B_scale, 
             topk_weights,
             sorted_token_ids, expert_ids,
             num_tokens_post_padded,
             mul_routed_weight,
             TOP_K,
-            config={"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 32, "ACCF32":False, "SPLIT_K":1, "GROUP_SIZE_M":8},
+            config={"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 32, "SPLIT_K":1, "GROUP_SIZE_M":8},
             compute_type=compute_type,
             use_fp8_w8a8=False,
             use_int8_w8a8=False,
             use_int8_w8a16=False,
             use_int4_w4a16=False,
-            orig_acc_dtype=torch.bfloat16,
             per_channel_quant=False,
             block_shape=None,
             B_bias=B_bias,
@@ -285,21 +284,20 @@ def test_invoke_fused_moe_kernel_only():
             torch.cuda.synchronize()
             evt_s.record()
             for _ in range(ITERS):
-                vllm_invoke_fused_moe_kernel(
+                invoke_fused_moe_triton_kernel(
                     A, B, C,
-                    A_scale, B_scale, B_zp,
+                    A_scale, B_scale,
                     topk_weights,
                     sorted_token_ids, expert_ids,
                     num_tokens_post_padded,
                     mul_routed_weight,
                     TOP_K,
-                    config={"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 32, "ACCF32":False, "SPLIT_K":1, "GROUP_SIZE_M":8},
+                    config={"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 32, "SPLIT_K":1, "GROUP_SIZE_M":8},
                     compute_type=compute_type,
                     use_fp8_w8a8=False,
                     use_int8_w8a8=False,
                     use_int8_w8a16=False,
                     use_int4_w4a16=False,
-                    orig_acc_dtype=torch.bfloat16,
                     per_channel_quant=False,
                     block_shape=None,
                     B_bias=B_bias,

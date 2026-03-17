@@ -4,8 +4,9 @@ include requirements/build.txt
 include CMakeLists.txt
 include mcoplib/version
 
+recursive-include mcoplib/triton_utils *
 recursive-include include *
 recursive-include kernel *
+recursive-include common *
 recursive-include cmake *
 recursive-include op *
-recursive-include common *  # 添加common目录
