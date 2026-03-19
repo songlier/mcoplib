@@ -22,7 +22,7 @@ class Fused_mla_absorb_rotary_emb_runner(OpBenchmarkBase):
     def define_metrics(self, state):
         state.add_summary("Op", self.name)
         state.add_summary("dtype", "bfloat16")
-        shape_str = f"({self.q_len}, {self.num_local_heads}, {self.kv_lora_rank}, {self.qk_nope_head_dim}, {self.qk_rope_head_dim})"
+        shape_str = f"({self.q_len} {self.num_local_heads} {self.kv_lora_rank} {self.qk_nope_head_dim} {self.qk_rope_head_dim})"
         state.add_summary("Shape", shape_str)
         size_q = self.q_len * self.num_local_heads * (self.qk_nope_head_dim + self.qk_rope_head_dim)
         size_w_kc = self.num_local_heads * self.qk_nope_head_dim * self.kv_lora_rank
