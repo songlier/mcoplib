@@ -18,7 +18,7 @@ class Gptq_shuffle_runner(OpBenchmarkBase):
         packed_rows = getattr(self, "packed_rows", in_features // (32 // bits))
         state.add_summary("Op", self.name)
         state.add_summary("Bits", str(bits))
-        state.add_summary("Shape", f"({in_features}, {out_features})")
+        state.add_summary("Shape", f"({in_features} {out_features})")
         weight_elements = packed_rows * out_features
         perm_elements = in_features
         total_read = (weight_elements + perm_elements) * 4
