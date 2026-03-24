@@ -173,8 +173,7 @@ if(DEFINED ENV{DEBUG_LINE_INFO})
     $<$<COMPILE_LANGUAGE:CUDA>:--generate-line-info> 
   )
 endif()
-
-################cutlass build option################
+##############cutlass build option#########################
 
 option(GLOBAL_ENABLE_BUILD_CUTLASS_OP "Build the default op kernels subproject" ON)
 # 如果存在环境变量，则覆盖默认设置
@@ -189,7 +188,7 @@ if(DEFINED ENV{ENABLE_BUILD_CUTLASS_OP})
 endif()
 
 if (GLOBAL_ENABLE_BUILD_CUTLASS_OP)
-    add_definitions(-DENABLE_CUTALASS_OP)
+  add_definitions(-DENABLE_CUTALASS_OP)
 endif()
 
 #
@@ -277,7 +276,7 @@ if (BUILD_VLLM_SUBMODULE)
         "${VLLM_SRC_DIR}/quantization/fp4/nvfp4_scaled_mm_entry.cu"
         "${VLLM_SRC_DIR}/sparse/cutlass/sparse_scaled_mm_entry.cu"
         "${VLLM_SRC_DIR}/attention/mla/cutlass_mla_entry.cu")
-  endif()
+    endif()
 
     set_gencode_flags_for_srcs(
       SRCS "${VLLM_EXT_SRC}"
@@ -337,7 +336,7 @@ if (BUILD_VLLM_SUBMODULE)
   # driver API. This causes problems when linking with earlier versions of CUDA.
   # Setting this variable sidesteps the issue by calling the driver directly.
   target_compile_definitions(_C PRIVATE CUTLASS_ENABLE_DIRECT_CUDA_DRIVER_CALL=1)
-  
+
   #添加编译参数
   target_compile_options(_C PRIVATE 
   $<$<COMPILE_LANGUAGE:CUDA>:
@@ -369,6 +368,11 @@ if (BUILD_VLLM_SUBMODULE)
   #if(MCOPLIB_GPU_LANG STREQUAL "CUDA")
   #  list(APPEND VLLM_MOE_EXT_SRC "${VLLM_SRC_DIR}/moe/moe_wna16.cu")
   #endif()
+
+  if(MCOPLIB_GPU_LANG STREQUAL "CUDA")
+    list(APPEND VLLM_MOE_EXT_SRC
+      "${VLLM_SRC_DIR}/moe/router_gemm.cu")
+  endif()
 
   set_gencode_flags_for_srcs(
     SRCS "${VLLM_MOE_EXT_SRC}"
@@ -420,7 +424,6 @@ if (BUILD_VLLM_SUBMODULE)
     ${BLAS_API_ARGS}
     USE_SABI 3
     WITH_SOABI)
-
 endif()
 
 
@@ -554,6 +557,7 @@ if (BUILD_SGLANG_SUBMODULE)
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/moe/fused_qknorm_rope_kernel.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/moe/moe_topk_sigmoid_kernels.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/mamba/causal_conv1d.cu")
+
   if (GLOBAL_ENABLE_BUILD_CUTLASS_OP)
     list(APPEND MCOPLIB_SGLANG_KERNEL_SRC
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/moe/cutlass_moe/scaled_mm_c2x.cu"
@@ -595,6 +599,7 @@ if (BUILD_SGLANG_SUBMODULE)
       $<$<COMPILE_LANGUAGE:CUDA>:-DFLASHINFER_ENABLE_BF16 -U__CUDA_NO_HALF2_OPERATORS__ -U__CUDA_NO_HALF_OPERATORS__ >
   )
 
+
   ############sglang grouped_gemm_cuda##############
   set(MCOPLIB_SGLANG_GROUPED_GEMM_SRC
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/moe/grouped_gemm.cpp"
@@ -616,6 +621,8 @@ if (BUILD_SGLANG_SUBMODULE)
     INCLUDE_DIRECTORIES ${SGLANG_KERNELS_SRCS_DIR}/include
     INCLUDE_DIRECTORIES ${SGLANG_KERNELS_SRCS_DIR}/csrc)
   set_target_properties(sgl_grouped_gemm_cuda PROPERTIES PREFIX "" SUFFIX "${EXT_SUFFIX}")
+
+
 
   target_compile_options(sgl_grouped_gemm_cuda PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
@@ -646,6 +653,7 @@ if (BUILD_SGLANG_SUBMODULE)
     INCLUDE_DIRECTORIES ${SGLANG_KERNELS_SRCS_DIR}/csrc)
   set_target_properties(sgl_moe_fused_w4a16 PROPERTIES PREFIX "" SUFFIX "${EXT_SUFFIX}")
 
+
   #添加编译参数
   target_compile_options(sgl_moe_fused_w4a16 PRIVATE
       $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
@@ -653,6 +661,7 @@ if (BUILD_SGLANG_SUBMODULE)
       $<$<COMPILE_LANGUAGE:CUDA>:--expt-extended-lambda>
       $<$<COMPILE_LANGUAGE:CUDA>:-U__MACA_NO_HALF_OPERATORS__ -U__CUDA_NO_HALF2_OPERATORS__ -U__CUDA_NO_HALF_OPERATORS__ >
   )
+
 
   ############sglang grouped_gemm_mctlass_int8##############
   set(MCOPLIB_SGLANG_GROUPED_GEMM_MCTLASS_SRC
