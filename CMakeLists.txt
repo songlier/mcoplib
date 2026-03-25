@@ -173,23 +173,6 @@ if(DEFINED ENV{DEBUG_LINE_INFO})
     $<$<COMPILE_LANGUAGE:CUDA>:--generate-line-info> 
   )
 endif()
-##############cutlass build option#########################
-
-option(GLOBAL_ENABLE_BUILD_CUTLASS_OP "Build the default op kernels subproject" ON)
-# 如果存在环境变量，则覆盖默认设置
-if(DEFINED ENV{ENABLE_BUILD_CUTLASS_OP})
-    message(STATUS "mcoplib build option ENV ENABLE_BUILD_CUTLASS_OP:$ENV{ENABLE_BUILD_CUTLASS_OP}")
-    string(TOLOWER "$ENV{ENABLE_BUILD_CUTLASS_OP}" _val)
-    if (_val STREQUAL "1" OR _val STREQUAL "on" OR _val STREQUAL "true")
-        set(GLOBAL_ENABLE_BUILD_CUTLASS_OP ON)
-    else()
-        set(GLOBAL_ENABLE_BUILD_CUTLASS_OP OFF)
-    endif()
-endif()
-
-if (GLOBAL_ENABLE_BUILD_CUTLASS_OP)
-  add_definitions(-DENABLE_CUTALASS_OP)
-endif()
 
 #
 # Use FetchContent for C++ dependencies that are compiled as part of vLLM's build process.
@@ -213,7 +196,6 @@ if (BUILD_VLLM_SUBMODULE)
   set(VLLM_EXT_SRC
     "${VLLM_SRC_DIR}/mamba/mamba_ssm/selective_scan_fwd.cu"
     "${VLLM_SRC_DIR}/cache_kernels.cu"
-    "${VLLM_SRC_DIR}/cache_kernels_fused.cu"
     "${VLLM_SRC_DIR}/attention/paged_attention_v1.cu"
     "${VLLM_SRC_DIR}/attention/paged_attention_v2.cu"
     "${VLLM_SRC_DIR}/attention/merge_attn_states.cu"
@@ -224,8 +206,6 @@ if (BUILD_VLLM_SUBMODULE)
     "${VLLM_SRC_DIR}/layernorm_quant_kernels.cu"
     "${VLLM_SRC_DIR}/fused_qknorm_rope_kernel.cu"
     "${VLLM_SRC_DIR}/sampler.cu"
-    "${VLLM_SRC_DIR}/topk.cu"
-    "${VLLM_SRC_DIR}/dsv3_fused_a_gemm.cu"
     "${VLLM_SRC_DIR}/cuda_view.cu"
     "${VLLM_SRC_DIR}/quantization/gptq/q_gemm.cu"
     "${VLLM_SRC_DIR}/quantization/compressed_tensors/int8_quant_kernels.cu"
@@ -235,6 +215,13 @@ if (BUILD_VLLM_SUBMODULE)
     "${VLLM_SRC_DIR}/quantization/activation_kernels.cu"
     "${VLLM_SRC_DIR}/cuda_utils_kernels.cu"
     "${VLLM_SRC_DIR}/torch_bindings.cpp")
+
+  # support opt of gptq-marlin
+  set_source_files_properties(
+    "${VLLM_SRC_DIR}/quantization/gptq/q_gemm.cu"
+    PROPERTIES
+    COMPILE_FLAGS "-mllvm -metaxgpu-igroup=true -mllvm -metaxgpu-igroup-config=B8 -maxmregcount=128"
+  )
 
   if(MCOPLIB_GPU_LANG STREQUAL "CUDA")
     SET(CUTLASS_ENABLE_HEADERS_ONLY ON CACHE BOOL "Enable only the header library")
@@ -260,27 +247,41 @@ if (BUILD_VLLM_SUBMODULE)
       message(STATUS "The VLLM_CUTLASS_SRC_DIR is set, using ${VLLM_CUTLASS_SRC_DIR} for compilation")
       FetchContent_Declare(cutlass SOURCE_DIR ${VLLM_CUTLASS_SRC_DIR})
     else()
-      message(FATAL_ERROR "Error: Unable to download cutlass automatically. Please download cutlass manually and set the 'VLLM_CUTLASS_SRC_DIR' environment variable.")
+      FetchContent_Declare(
+          cutlass
+          GIT_REPOSITORY https://github.com/nvidia/cutlass.git
+          # Please keep this in sync with CUTLASS_REVISION line above.
+          GIT_TAG ${CUTLASS_REVISION}
+          GIT_PROGRESS TRUE
+
+          # Speed up CUTLASS download by retrieving only the specified GIT_TAG instead of the history.
+          # Important: If GIT_SHALLOW is enabled then GIT_TAG works only with branch names and tags.
+          # So if the GIT_TAG above is updated to a commit hash, GIT_SHALLOW must be set to FALSE
+          GIT_SHALLOW TRUE
+      )
     endif()
     FetchContent_MakeAvailable(cutlass)
 
     list(APPEND VLLM_EXT_SRC
       "${VLLM_SRC_DIR}/quantization/awq/gemm_kernels.cu"
       "${VLLM_SRC_DIR}/permute_cols.cu"
+      "${VLLM_SRC_DIR}/quantization/cutlass_w8a8/scaled_mm_entry.cu"
       "${VLLM_SRC_DIR}/quantization/fp4/nvfp4_quant_entry.cu"
-      "${VLLM_SRC_DIR}/cutlass_extensions/common.cpp")
-
-    if (GLOBAL_ENABLE_BUILD_CUTLASS_OP)
-      list(APPEND VLLM_EXT_SRC
-        "${VLLM_SRC_DIR}/quantization/cutlass_w8a8/scaled_mm_entry.cu"
-        "${VLLM_SRC_DIR}/quantization/fp4/nvfp4_scaled_mm_entry.cu"
-        "${VLLM_SRC_DIR}/sparse/cutlass/sparse_scaled_mm_entry.cu"
-        "${VLLM_SRC_DIR}/attention/mla/cutlass_mla_entry.cu")
-    endif()
+      "${VLLM_SRC_DIR}/quantization/fp4/nvfp4_scaled_mm_entry.cu"
+      "${VLLM_SRC_DIR}/sparse/cutlass/sparse_scaled_mm_entry.cu"
+      "${VLLM_SRC_DIR}/cutlass_extensions/common.cpp"
+      "${VLLM_SRC_DIR}/attention/mla/cutlass_mla_entry.cu")
 
     set_gencode_flags_for_srcs(
       SRCS "${VLLM_EXT_SRC}"
       CUDA_ARCHS "${CUDA_ARCHS}")
+
+    # support opt of gptq-marlin
+    set_source_files_properties(
+      "${VLLM_SRC_DIR}/quantization/awq/gemm_kernels.cu"
+      PROPERTIES
+      COMPILE_FLAGS " -mllvm -metaxgpu-igroup=true -mllvm -metaxgpu-igroup-config=B8 -maxmregcount=128"
+    )
 
     # support opt of cutlass w8a8 scale mm
     set_source_files_properties(
@@ -297,7 +298,7 @@ if (BUILD_VLLM_SUBMODULE)
       "7.5;8.0;8.7;8.9+PTX" "${CUDA_ARCHS}")
     # subtract out the archs that are already built for 3x
     list(REMOVE_ITEM SCALED_MM_2X_ARCHS ${SCALED_MM_3X_ARCHS})
-    if (SCALED_MM_2X_ARCHS AND GLOBAL_ENABLE_BUILD_CUTLASS_OP)
+    if (SCALED_MM_2X_ARCHS)
       set(SRCS "${VLLM_SRC_DIR}/quantization/cutlass_w8a8/scaled_mm_c2x.cu")
       set_gencode_flags_for_srcs(
         SRCS "${SRCS}"
@@ -354,12 +355,12 @@ if (BUILD_VLLM_SUBMODULE)
   set(VLLM_MOE_EXT_SRC
     "${VLLM_SRC_DIR}/moe/torch_bindings.cpp"
     "${VLLM_SRC_DIR}/moe/moe_align_sum_kernels.cu"
-    #"${VLLM_SRC_DIR}/moe/moe_lora_align_sum_kernels.cu"
+    "${VLLM_SRC_DIR}/moe/moe_lora_align_sum_kernels.cu"
     "${VLLM_SRC_DIR}/moe/topk_softmax_kernels.cu"
     "${VLLM_SRC_DIR}/moe/grouped_topk_kernels.cu")
 
   if (USE_MACA AND ENABLE_BLAS_API)
-    #list(APPEND VLLM_MOE_EXT_SRC "${VLLM_SRC_DIR}/moe/moe_ops.cpp")
+    list(APPEND VLLM_MOE_EXT_SRC "${VLLM_SRC_DIR}/moe/moe_ops.cpp")
 
     set(MCBLAS_INCLUDE_DIR $ENV{MACA_PATH}/include/mcblas)
     set(MCBLAS_LIB $ENV{MACA_PATH}/lib/libmcblas.so)
@@ -368,11 +369,6 @@ if (BUILD_VLLM_SUBMODULE)
   #if(MCOPLIB_GPU_LANG STREQUAL "CUDA")
   #  list(APPEND VLLM_MOE_EXT_SRC "${VLLM_SRC_DIR}/moe/moe_wna16.cu")
   #endif()
-
-  if(MCOPLIB_GPU_LANG STREQUAL "CUDA")
-    list(APPEND VLLM_MOE_EXT_SRC
-      "${VLLM_SRC_DIR}/moe/router_gemm.cu")
-  endif()
 
   set_gencode_flags_for_srcs(
     SRCS "${VLLM_MOE_EXT_SRC}"
@@ -490,10 +486,14 @@ if (BUILD_DEFAULT_OP_SUBMODULE)
       "${MCOPLIB_SRCS_DIR}/fused_add_layernorm_per_token_quant_padding_output.cu"
       "${MCOPLIB_SRCS_DIR}/rms_norm_dynamic_per_token_quant.cu"
       "${MCOPLIB_SRCS_DIR}/fused_moe_gate_deepseek.cu"
-      "${MCOPLIB_SRCS_DIR}/gptq_marlin.cu"
-      "${MCOPLIB_SRCS_DIR}/moe_fused_gate_opt.cu"
-      "${MCOPLIB_SRCS_DIR}/glm_attention_prepare.cu")
+      "${MCOPLIB_SRCS_DIR}/gptq_marlin.cu")
 
+  set_source_files_properties(
+    "${MCOPLIB_SRCS_DIR}/gptq_marlin.cu"
+    "${MCOPLIB_SRCS_DIR}/fused_moe_gate_deepseek.cu"
+    PROPERTIES
+    COMPILE_FLAGS "-mllvm -metaxgpu-igroup=true -mllvm -metaxgpu-igroup-config=B8 -maxmregcount=128"
+  )
   set_gencode_flags_for_srcs(
     SRCS "${MCOPLIB_EXT_SRC}"
     CUDA_ARCHS "${CUDA_ARCHS}")
@@ -526,7 +526,6 @@ if (BUILD_SGLANG_SUBMODULE)
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/elementwise/activation.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/elementwise/fused_add_rms_norm_kernel.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/elementwise/rope.cu"
-      "${SGLANG_KERNELS_SRCS_DIR}/csrc/elementwise/pos_enc.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/elementwise/topk.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/elementwise/copy.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/elementwise/concat_mla.cu"
@@ -549,20 +548,14 @@ if (BUILD_SGLANG_SUBMODULE)
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/memory/weak_ref_tensor.cpp"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/quantization/int8_quant_kernels.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/quantization/quantize_kernel.cu"
-      "${SGLANG_KERNELS_SRCS_DIR}/csrc/sgl_diffusion/elementwise/timestep_embedding.cu"
-      "${SGLANG_KERNELS_SRCS_DIR}/csrc/quantization/fp8_quantize_kernel.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/elementwise/fused_layernorm_dynamic_per_token_quant_custom.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/elementwise/fused_rotary_emb.cu"
+      #"${SGLANG_KERNELS_SRCS_DIR}/csrc/moe/cutlass_moe/scaled_mm_c2x.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/moe/kimi_k2_moe_fused_gate.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/moe/fused_qknorm_rope_kernel.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/moe/moe_topk_sigmoid_kernels.cu"
       "${SGLANG_KERNELS_SRCS_DIR}/csrc/mamba/causal_conv1d.cu")
-
-  if (GLOBAL_ENABLE_BUILD_CUTLASS_OP)
-    list(APPEND MCOPLIB_SGLANG_KERNEL_SRC
-      "${SGLANG_KERNELS_SRCS_DIR}/csrc/moe/cutlass_moe/scaled_mm_c2x.cu"
-      "${SGLANG_KERNELS_SRCS_DIR}/csrc/cutlass_w8a8/scaled_mm_entry.cu")
-  endif()
+      #"${SGLANG_KERNELS_SRCS_DIR}/csrc/cutlass_w8a8/scaled_mm_entry.cu")
 
   set_gencode_flags_for_srcs(
     SRCS "${MCOPLIB_SGLANG_KERNEL_SRC}"
@@ -590,7 +583,7 @@ if (BUILD_SGLANG_SUBMODULE)
     INCLUDE_DIRECTORIES ${SGLANG_KERNELS_SRCS_DIR}/csrc/fast_hadamard_transform)
 
   set_target_properties(sgl_kernel PROPERTIES PREFIX "" SUFFIX "${EXT_SUFFIX}")
-  #target_link_libraries(sgl_kernel PRIVATE mctlassEx)
+  target_link_libraries(sgl_kernel PRIVATE mctlassEx)
   #添加编译参数
   target_compile_options(sgl_kernel PRIVATE
       $<$<COMPILE_LANGUAGE:CUDA>:-O3 -std=c++17 -Xcompiler -fPIC -gencode=arch=compute_75,code=sm_75 -gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_89,code=sm_89 -gencode=arch=compute_90,code=sm_90>

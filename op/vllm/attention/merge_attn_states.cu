@@ -53,7 +53,7 @@ __global__ void merge_attn_states_kernel(
   /* In certain edge cases, MLA can produce p_lse = s_lse = -inf;
      continuing the pipeline then yields NaN. Root cause: with chunked prefill
      a batch may be split into two chunks; if a request in that batch has no
-     prefix hit, every LSE entry for that requestâ€™s position is -inf, and at
+     prefix hit, every LSE entry for that request¡¯s position is -inf, and at
      this moment we merge cross-attention at first. For now we simply emit
      prefix_output (expected to be all zeros) and prefix_lse (-inf) to fix
      this problem.

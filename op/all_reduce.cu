@@ -1,12 +1,9 @@
-// Copyright (c) 2025 MetaX Integrated Circuits (Shanghai) Co., Ltd. All rights reserved.
 #include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <torch/extension.h>
 #include <torch/torch.h>
 #include <cub/cub.cuh>
 #include "../kernel/all_reduce_kernel.cuh"
-#include "mcoplib_ops_params_info.hpp"
-#include "mcoplib_ops_params_dump.hpp"
 
 template<typename T, int ELTS_PER_LDG>
 __global__ void reduce_kernel_max_vec(T* input, T* output, int num_tokens, int hidden_size, int num_vec) {
@@ -135,8 +132,6 @@ void launch_all_reduce_sum_kernel(T* input, T* output, int num_tokens, int hidde
 void all_reduce_max(at::Tensor input,
                 at::Tensor output)               // [num_tokens, hidden_size]
 {
-    DEBUG_TRACE_PARAMS(input, output);
-    DEBUG_DUMP_PARAMS(input, output);
     const int hidden_size = input.size(-1);
     const int num_tokens = input.numel() / hidden_size;
     const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
@@ -151,8 +146,6 @@ void all_reduce_max(at::Tensor input,
 void all_reduce_sum(at::Tensor input,
                 at::Tensor output)               // [num_tokens, hidden_size]
 {
-    DEBUG_TRACE_PARAMS(input, output);
-    DEBUG_DUMP_PARAMS(input, output);
     const int hidden_size = input.size(-1);
     const int num_tokens = input.numel() / hidden_size;
     const cudaStream_t stream = at::cuda::getCurrentCUDAStream();

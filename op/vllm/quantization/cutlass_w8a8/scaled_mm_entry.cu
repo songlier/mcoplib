@@ -5,6 +5,21 @@
 
 #include "cutlass_extensions/common.hpp"
 
+void cutlass_moe_mm_sm75(torch::Tensor& out, torch::Tensor const& a, torch::Tensor const& b,
+                         torch::Tensor const& moe_weight,
+                         torch::Tensor const& token_ids, torch::Tensor const& expert_ids, 
+                         torch::Tensor const& num_tokens_post_padded, int64_t num_valid_tokens, 
+                         int64_t topk, bool mul_routed_weight);
+
+int64_t cutlass_moe_mm_gemm_kernel_m_w8a8_sm75(int64_t num_valid_tokens, int64_t N, int64_t K, int64_t group);
+
+void cutlass_moe_mm_w8a8_sm75(torch::Tensor const& a, torch::Tensor const& b, torch::Tensor& c,
+  torch::Tensor const& a_scales, torch::Tensor const& b_scales, torch::Tensor const& moe_weight,
+  torch::Tensor const& token_ids, torch::Tensor const& expert_ids, 
+  torch::Tensor const& num_tokens_post_padded, 
+  int64_t N, int64_t K, int64_t EM, int64_t num_valid_tokens, int64_t topk, bool mul_routed_weight);
+
+  
 void cutlass_scaled_mm_sm75(torch::Tensor& c, torch::Tensor const& a,
                             torch::Tensor const& b,
                             torch::Tensor const& a_scales,
@@ -29,6 +44,35 @@ bool cutlass_scaled_mm_supports_block_fp8(int64_t cuda_device_capability) {
 
 bool cutlass_group_gemm_supported(int64_t cuda_device_capability) {
   return false;
+}
+
+void cutlass_moe_bf16_mm(
+  torch::Tensor& out, torch::Tensor const& a, torch::Tensor const& b,
+  torch::Tensor const& moe_weight,
+  torch::Tensor const& token_ids, torch::Tensor const& expert_ids, 
+  torch::Tensor const& num_tokens_post_padded, int64_t num_valid_tokens, 
+  int64_t topk, bool mul_routed_weight) {
+
+  cutlass_moe_mm_sm75(out, a, b, moe_weight, token_ids, expert_ids, 
+                      num_tokens_post_padded, num_valid_tokens, 
+                      topk, mul_routed_weight);
+  
+  return;
+}
+
+int64_t cutlass_moe_mm_gemm_kernel_m_w8a8(int64_t num_valid_tokens, 
+                                          int64_t N, int64_t K, int64_t group) {
+  return cutlass_moe_mm_gemm_kernel_m_w8a8_sm75(num_valid_tokens, N, K, group);
+}
+
+void cutlass_moe_mm_w8a8(torch::Tensor const& a, torch::Tensor const& b, torch::Tensor& c,
+  torch::Tensor const& a_scales, torch::Tensor const& b_scales, torch::Tensor const& moe_weight,
+  torch::Tensor const& token_ids, torch::Tensor const& expert_ids, 
+  torch::Tensor const& num_tokens_post_padded, 
+  int64_t N, int64_t K, int64_t EM, int64_t num_valid_tokens, int64_t topk, bool mul_routed_weight) {
+
+  cutlass_moe_mm_w8a8_sm75(a, b, c, a_scales, b_scales, moe_weight, token_ids, expert_ids,
+                           num_tokens_post_padded, N, K, EM, num_valid_tokens, topk, mul_routed_weight);
 }
 
 void cutlass_scaled_mm(torch::Tensor& c, torch::Tensor const& a,
@@ -66,7 +110,7 @@ void get_cutlass_moe_mm_data(
       version_num, ". Required capability: 90");
 }
 
-void get_cutlass_batched_moe_mm_data(torch::Tensor& expert_offsets,
+void get_cutlass_pplx_moe_mm_data(torch::Tensor& expert_offsets,
                                   torch::Tensor& problem_sizes1,
                                   torch::Tensor& problem_sizes2,
                                   const torch::Tensor& expert_num_tokens,
@@ -76,7 +120,7 @@ void get_cutlass_batched_moe_mm_data(torch::Tensor& expert_offsets,
   int32_t version_num = get_sm_version_num();
   TORCH_CHECK_NOT_IMPLEMENTED(
       false,
-      "No compiled get_cutlass_batched_moe_mm_data: no cutlass_scaled_mm kernel "
+      "No compiled get_cutlass_pplx_moe_mm_data: no cutlass_scaled_mm kernel "
       "for CUDA device capability: ",
       version_num, ". Required capability: 90");
 }

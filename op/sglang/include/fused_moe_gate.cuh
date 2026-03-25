@@ -1,4 +1,3 @@
-// 2025 - Modified by MetaX Integrated Circuits (Shanghai) Co., Ltd. All Rights Reserved.
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
 
@@ -25,9 +24,8 @@ __device__ __forceinline__ float scalar2float(scalar_t val) {
     }
     else if constexpr (std::is_same_v<scalar_t, nv_bfloat16> || std::is_same_v<scalar_t, at::BFloat16>) {
         return static_cast<float>(val);
-    }else if constexpr (std::is_same_v<scalar_t, float> ) {
-        return val;
-    } else {
+    }
+    else {
         if((threadIdx.x == 0) && (blockIdx.x == 0)){
             printf("unsupported scalar type. %s %d\n", __func__, __LINE__);
         } 
@@ -40,10 +38,7 @@ __device__ __forceinline__ scalar_t float2scalar(float val) {
         return __float2half(val);
     } else if constexpr (std::is_same_v<scalar_t, nv_bfloat16> || std::is_same_v<scalar_t, at::BFloat16>) {
         return __float2bfloat16_rn(val);
-    } else if constexpr (std::is_same_v<scalar_t, float> ) {
-        return val;
-    } 
-    else {
+    } else {
         if((threadIdx.x == 0) && (blockIdx.x == 0)){
             printf("unsupported scalar type. %s %d\n", __func__, __LINE__);
         }
@@ -91,11 +86,8 @@ template<class scalar_t>
                 bool weight_eq = false;
                 if constexpr (std::is_same_v<scalar_t, __half> || std::is_same_v<scalar_t, at::Half>)
                 {
-                    float val_other = __half2float((__half)other_weight_bits);
-                    float val_curr  = __half2float((__half)current_weight_bits);
-                        
-                    weight_gt = val_other > val_curr;
-                    weight_eq = val_other == val_curr;
+                    weight_gt = (__half)other_weight_bits > (__half)current_weight_bits;
+                    weight_eq = (__half)other_weight_bits == (__half)current_weight_bits;
                 } else if constexpr (std::is_same_v<scalar_t, __nv_bfloat16> || std::is_same_v<scalar_t, at::BFloat16>)
                 {
                     weight_gt = other_weight_bits > current_weight_bits;
@@ -109,16 +101,9 @@ template<class scalar_t>
                 bool cond = (tid < other_tid) ^ direction;
                 bool swap = false;
                 if constexpr (std::is_same_v<scalar_t, __half> || std::is_same_v<scalar_t, at::Half>) {
-                    // 提前转换变量，代码更清晰
-                    float val_other = __half2float((__half)other_weight_bits);
-                    float val_curr  = __half2float((__half)current_weight_bits);
                     swap = (cond & (weight_gt | (weight_eq & index_lt))) |
-                            (!cond & ((val_other < val_curr) | (weight_eq & (other_index > current_index))));
-            
+                            (!cond & (((__half)other_weight_bits < (__half)current_weight_bits) | (weight_eq & (other_index > current_index))));
                     val = swap ? other_temp_val : val;
-                    //swap = (cond & (weight_gt | (weight_eq & index_lt))) |
-                    //        (!cond & (((__half)other_weight_bits < (__half)current_weight_bits) | (weight_eq & (other_index > current_index))));
-                    //val = swap ? other_temp_val : val;
                 } else if constexpr (std::is_same_v<scalar_t, __nv_bfloat16> || std::is_same_v<scalar_t, at::BFloat16>) {
                     swap = (cond & (weight_gt | (weight_eq & index_lt))) |
                             (!cond & ((other_weight_bits < current_weight_bits) | (weight_eq & (other_index > current_index))));
@@ -260,19 +245,12 @@ template<class scalar_t>
         int wave_lane = tid % WAVE_SIZE;
         int wave_idx = tid / WAVE_SIZE;
         scalar_t idx_and_weight[2]; //Stores weight and index for further top1
-        
-        if (tid < NUM_EXPERTS) {
-            float fw = scalar2float<scalar_t>(w[tid]);
-            scalar_t fw_sim = float2scalar<scalar_t>(__builtin_rcpf((1.0f + __expf(-fw))));
-            scalar_t fw_bf16 = fw_sim + bias[tid];
-            idx_and_weight[0] = fw_bf16;
-            global_score[tid] = fw_sim; // 只有有效线程才能写入 Shared Memory
-        } else {
-            // 对于补充的虚拟线程，赋予极小值，确保排序后在最后面
-            idx_and_weight[0] =  -INFINITY;// -inf
-            // global_score 不需要写，因为 Phase 2 只会读取 TopK 的索引
-        }
 
+        float fw = scalar2float<scalar_t>(w[tid]);
+        scalar_t fw_sim = float2scalar<scalar_t>(__builtin_rcpf((1.0f + __expf(-fw))));
+        scalar_t fw_bf16 = fw_sim + bias[tid];
+        idx_and_weight[0] = fw_bf16;
+        global_score[tid] = fw_sim;
         if constexpr (std::is_same_v<scalar_t, at::BFloat16> || std::is_same_v<scalar_t, at::Half>)
         {
             idx_and_weight[1] = float2scalar<scalar_t>(0.0f);
@@ -286,39 +264,31 @@ template<class scalar_t>
         //And do descending sort
         warpSortDescending<scalar_t, 64, 0xffffffffffffffff>(idx_and_weight, tid);
 
-
-
         __shared__ scalar_t max_cache[64][2];
         int offset = wave_lane + wave_idx * TOPK;
-        if (wave_lane < TOPK ) {
+        if (wave_lane < TOPK) {
             if constexpr (std::is_same_v<scalar_t, float>) {
                 max_cache[offset][0] = idx_and_weight[0];
                 *((uint32_t*)&max_cache[offset][1]) = *((uint32_t*)&idx_and_weight[1]);
             }
-            else{
+            else
                 ((float*)(max_cache))[offset] = *(float*)idx_and_weight;
-            }
-                
         }
-
-        // 对于160专家: (160+64-1)/64 = 3, 3*8 = 24
-        constexpr int num_waves = (NUM_EXPERTS + WAVE_SIZE - 1) / WAVE_SIZE;
-        constexpr int topks_in_block = num_waves * TOPK;
-        // must use small value to fill max_cache[topks_in_block~63]
+        constexpr int topks_in_block = NUM_EXPERTS / WAVE_SIZE * TOPK;
+        // must use small value to fill max_cache[NUM_EXPERTS / WAVE_SIZE * TOPK~63] 
         if (wave_idx == 0 && wave_lane >= topks_in_block) {
             if constexpr (std::is_same_v<scalar_t, float>) {
-                max_cache[wave_lane][0] = -INFINITY;
+                max_cache[wave_lane][0] = 0.f;
                 *((uint32_t*)&max_cache[wave_lane][1]) = tid;
             }
             else
                 ((float*)(max_cache))[wave_lane] = *(float*)idx_and_weight;
         }
-   
         __syncthreads();
 
         //We get NUM_EXPERTS/WAVE_SIZE*TOPK experts&weights
         //Sort NUM_EXPERTS/WAVE_SIZE*TOPK elements in 1 wave
-        int top_k_idx = -1;
+        int top_k_idx = 0;
         if (wave_idx == 0) {
             if constexpr (std::is_same_v<scalar_t, float>) {
                 idx_and_weight[0] = max_cache[wave_lane][0];
@@ -328,6 +298,7 @@ template<class scalar_t>
                 *(float*)idx_and_weight = ((float*)(max_cache))[wave_lane];
             __syncthreads();
             warpSortDescending<scalar_t, 64, 0xffffffffffffffff>(idx_and_weight, tid);
+            //Now all values are stored into shared_max_experts
             if constexpr (std::is_same_v<scalar_t, float>)
                 top_k_idx = *((int32_t*)&idx_and_weight[1]);
             else
@@ -402,7 +373,6 @@ template<class scalar_t>
         int top_k_idx = 0;
         if constexpr (NUM_GROUPS == 1) {
             top_k_idx = moe_topk_1group_block_phase1<scalar_t, NUM_EXPERTS, 1, TOPK>(w + bdx * NUM_EXPERTS, bias, global_score, tid);
-
         } else {
             top_k_idx = moe_topk_block_phase1<scalar_t>(w + bdx * NUM_EXPERTS, bias, global_score, tid);
         }
@@ -423,9 +393,6 @@ template<class scalar_t>
         int top_k_idx = 0;
         if constexpr (NUM_GROUPS == 1) {
             top_k_idx = moe_topk_1group_block_phase1<scalar_t, NUM_EXPERTS, 1, TOPK>(w + bdx * NUM_EXPERTS, bias, global_score, tid);
-            // if(bdx == 0) {
-            //     printf("fused_topk Info: tid=%d, top_k_idx =%d, \n", tid, top_k_idx);
-            // }
         } else {
             top_k_idx = moe_topk_block_phase1<scalar_t>(w + bdx * NUM_EXPERTS, bias, global_score, tid);
         }

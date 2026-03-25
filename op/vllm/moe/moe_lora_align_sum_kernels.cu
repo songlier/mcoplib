@@ -130,7 +130,7 @@ void moe_lora_align_block_size(
     int64_t max_num_tokens_padded, int64_t max_num_m_blocks,
     torch::Tensor sorted_token_ids, torch::Tensor expert_ids,
     torch::Tensor num_tokens_post_pad, torch::Tensor adapter_enabled,
-    torch::Tensor lora_ids, std::optional<torch::Tensor> maybe_expert_map) {
+    torch::Tensor lora_ids) {
   const int topk_num = topk_ids.size(1);
 
   TORCH_CHECK(block_size > 0, "block_size should be greater than 0. ");
@@ -146,19 +146,9 @@ void moe_lora_align_block_size(
   TORCH_CHECK(num_thread <= 128,
               "num_thread must be less than 1024, "
               "and fallback is not implemented yet.");
-  auto options_int =
-      torch::TensorOptions().dtype(torch::kInt).device(topk_ids.device());
-  bool has_expert_map = maybe_expert_map.has_value();
-  torch::Tensor expert_map;
-  if (has_expert_map) {
-    expert_map = maybe_expert_map.value();
-  } else {
-    expert_map = torch::empty({0}, options_int);
-  }
-
   const int32_t shared_mem = (num_thread + 1) * num_experts * sizeof(int32_t) +
                              (num_experts + 1) * sizeof(int32_t);
-  //printf("moe_lora_align_block_size ====>%ld num_thread:%ld num_experts:%lld \n", shared_mem, num_thread, num_experts);
+
   if (shared_mem > device_max_shared_mem) {
     TORCH_CHECK(false,
                 "Shared memory usage exceeds device limit, and global memory "
