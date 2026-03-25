@@ -1,5 +1,5 @@
-// 2025 - Modified by MetaX Integrated Circuits (Shanghai) Co., Ltd. All Rights Reserved.
-/*
+/* Copyright 2025 SGLang Team. All Rights Reserved.
+
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -157,14 +157,6 @@ void apply_rope_pos_ids_cos_sin_cache(
     const std::optional<at::Tensor>& k_buffer,
     const std::optional<at::Tensor>& v_buffer,
     const std::optional<at::Tensor>& kv_cache_loc);
-
-void rotary_embedding(
-    torch::Tensor& positions,
-    torch::Tensor& query,
-    std::optional<torch::Tensor> key,
-    int64_t head_size,
-    torch::Tensor& cos_sin_cache,
-    bool is_neox);
 
 int64_t fused_mla_absorb_rotary_emb(at::Tensor& q, at::Tensor& w_kc, at::Tensor& latent_cache, at::Tensor& cos_sin_cache,
                                 at::Tensor& positions, at::Tensor& norm_weight, at::Tensor& q_input, at::Tensor& k_input, at::Tensor& v_input, 
@@ -427,8 +419,7 @@ void fused_qk_norm_rope(
     double factor,
     double low,
     double high,
-    double attention_factor,
-    int64_t rotary_dim);
+    double attention_factor);
 
 // void cutlass_fp4_group_mm(
 //     torch::Tensor& output,
@@ -894,10 +885,10 @@ torch::Tensor ggml_moe_a8(
     int64_t top_k,
     int64_t tokens);
 
-// torch::Tensor ggml_moe_a8_vec(
-//     torch::Tensor X, torch::Tensor W, torch::Tensor topk_ids, int64_t top_k, int64_t type, int64_t row, int64_t tokens);
+torch::Tensor ggml_moe_a8_vec(
+    torch::Tensor X, torch::Tensor W, torch::Tensor topk_ids, int64_t top_k, int64_t type, int64_t row, int64_t tokens);
 
-// int64_t ggml_moe_get_block_size(int64_t type);
+int64_t ggml_moe_get_block_size(int64_t type);
 
 /*
  * From csrc/spatial
@@ -937,28 +928,26 @@ void causal_conv1d_fwd(
     bool silu_activation,
     int64_t pad_slot_id);
 
-#if ENABLE_CUTALASS_OP
-    int64_t cutlass_moe_mm_gemm_kernel_m_w8a8(int64_t num_valid_tokens,
-                                            int64_t N, 
-                                            int64_t K, 
-                                            int64_t group);
-                                            
-    void cutlass_moe_mm_w8a8(at::Tensor const& a, 
-                            at::Tensor const& b, 
-                            at::Tensor& c,
-                            at::Tensor const& a_scales, 
-                            at::Tensor const& b_scales, 
-                            at::Tensor const& moe_weight,
-                            at::Tensor const& token_ids, 
-                            at::Tensor const& expert_ids,
-                            at::Tensor const& num_tokens_post_padded,
-                            int64_t N, 
-                            int64_t K, 
-                            int64_t EM, 
-                            int64_t num_valid_tokens, 
-                            int64_t topk, 
-                            bool mul_routed_weight);
-#endif
+int64_t cutlass_moe_mm_gemm_kernel_m_w8a8(int64_t num_valid_tokens,
+                                          int64_t N, 
+                                          int64_t K, 
+                                          int64_t group);
+                                          
+void cutlass_moe_mm_w8a8(at::Tensor const& a, 
+                         at::Tensor const& b, 
+                         at::Tensor& c,
+                         at::Tensor const& a_scales, 
+                         at::Tensor const& b_scales, 
+                         at::Tensor const& moe_weight,
+                         at::Tensor const& token_ids, 
+                         at::Tensor const& expert_ids,
+                         at::Tensor const& num_tokens_post_padded,
+                         int64_t N, 
+                         int64_t K, 
+                         int64_t EM, 
+                         int64_t num_valid_tokens, 
+                         int64_t topk, 
+                         bool mul_routed_weight);
 
 // /*
 //  * From csrc/expert_specialization
@@ -1053,38 +1042,20 @@ int64_t fused_mla_normal_kv_element_wise(
 // std::vector<at::Tensor>
 // sparse_prefill_fwd(const at::Tensor& q, const at::Tensor& kv, const at::Tensor& indices, double sm_scale, int64_t d_v);
 
-#if ENABLE_CUTALASS_OP
-    /*
-    * From csrc/cutlass_w8a8
-    */
-    void cutlass_scaled_mm(torch::Tensor& out, torch::Tensor const& a,
-                        torch::Tensor const& b, torch::Tensor const& a_scales,
-                        torch::Tensor const& b_scales,
-                        std::optional<torch::Tensor> const& bias);
+/*
+* From csrc/cutlass_w8a8
+*/
+void cutlass_scaled_mm(torch::Tensor& out, torch::Tensor const& a,
+                       torch::Tensor const& b, torch::Tensor const& a_scales,
+                       torch::Tensor const& b_scales,
+                       std::optional<torch::Tensor> const& bias);
 
-    void cutlass_scaled_mm_azp(torch::Tensor& out, torch::Tensor const& a,
-                            torch::Tensor const& b,
-                            torch::Tensor const& a_scales,
-                            torch::Tensor const& b_scales,
-                            torch::Tensor const& azp_adj,
-                            std::optional<torch::Tensor> const& azp,
-                            std::optional<torch::Tensor> const& bias);
-#endif
+void cutlass_scaled_mm_azp(torch::Tensor& out, torch::Tensor const& a,
+                           torch::Tensor const& b,
+                           torch::Tensor const& a_scales,
+                           torch::Tensor const& b_scales,
+                           torch::Tensor const& azp_adj,
+                           std::optional<torch::Tensor> const& azp,
+                           std::optional<torch::Tensor> const& bias);
 
 torch::Tensor mx_awq_dequantize(torch::Tensor _kernel, torch::Tensor _scaling_factors, torch::Tensor _zeros, int64_t split_k_iters, int64_t thx, int64_t thy);
-
-void per_token_cast_to_fp8(
-    torch::Tensor& out,
-    torch::Tensor& scale,   
-    torch::Tensor const& input);
-/*
- * From csrc/sgl_diffusion/elementwise
- */
-torch::Tensor timestep_embedding(
-    const torch::Tensor& t,
-    torch::Tensor& output,
-    int64_t dim,
-    bool flip_sin_to_cos,
-    double downscale_freq_shift,
-    double scale,
-    int64_t max_period);

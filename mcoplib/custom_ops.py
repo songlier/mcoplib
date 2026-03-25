@@ -4,22 +4,6 @@ import torch
 import torch.library
 import mcoplib.op as ops
 
-def fused_attention_prepare(qkv :torch.tensor,
-                            weight :torch.tensor,
-                            positions :torch.tensor,
-                            num_heads :int,
-                            num_kv_heads :int,
-                            head_dim :int,
-                            base :float,
-                            max_position_embedding :int,
-                            rms_norm_eps :Optional[float] = None,
-                            partial_rotary_factor :Optional[float] = None):
-    out_q = torch.zeros((qkv.size(0), num_heads * head_dim), dtype=qkv.dtype, device=qkv.device)
-    out_kv = torch.zeros((qkv.size(0), num_kv_heads * head_dim), dtype=qkv.dtype, device=qkv.device)
-    ops.FusedAttentionPrepare(qkv, weight, positions, out_q, out_kv, num_heads, num_kv_heads, head_dim, base,
-                              max_position_embedding, rms_norm_eps, partial_rotary_factor)
-    return out_q, out_kv
-
 def fused_add_rms_norm_dynamic_per_token_quant_padding_output(input: torch.tensor, 
                                                               residual: torch.tensor,
                                                               weight: torch.tensor,
