@@ -186,22 +186,16 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
 
   // Optimized top-k per row operation
   ops.def(
-      "top_k_per_row_prefill(Tensor logits, Tensor rowStarts, Tensor rowEnds, "
+      "top_k_per_row(Tensor logits, Tensor rowStarts, Tensor rowEnds, "
       "Tensor! indices, int numRows, int stride0, "
-      "int stride1, int topK) -> ()");
-  ops.impl("top_k_per_row_prefill", torch::kCUDA, &top_k_per_row_prefill);
+      "int stride1) -> ()");
+  ops.impl("top_k_per_row", torch::kCUDA, &top_k_per_row);
 
   ops.def(
       "top_k_per_row_decode(Tensor logits, int next_n, "
-      "Tensor seq_lens, Tensor! indices, "
-      "int numRows, int stride0, int stride1, int topK) -> ()");
+      "Tensor seq_lens, Tensor! indices, int numRows, "
+      "int stride0, int stride1) -> ()");
   ops.impl("top_k_per_row_decode", torch::kCUDA, &top_k_per_row_decode);
-
-  ops.def(
-      "large_context_topk(Tensor score, Tensor indices, Tensor lengths, "
-      "Tensor? "
-      "row_starts_opt) -> ()");
-  ops.impl("large_context_topk", torch::kCUDA, &large_context_topk);
 
   // ┌------------------------  Not supported for Metax
   // ------------------------┐ Layernorm-quant Apply Root Mean Square (RMS)
@@ -259,11 +253,6 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("batched_rotary_embedding", torch::kCUDA, &batched_rotary_embedding);
 
   // Quantization ops
-  // DeepSeek V3 fused A GEMM (SM 9.0+, bf16 only, 1-16 tokens).
-  ops.def(
-      "dsv3_fused_a_gemm(Tensor! output, Tensor mat_a, Tensor mat_b) -> ()");
-  // conditionally compiled so impl registration is in source file
-
   // Quantized GEMM for AWQ.
   ops.def(
       "awq_gemm(Tensor _in_feats, Tensor _kernel, Tensor _scaling_factors, "
@@ -362,8 +351,8 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   // -------------------------┐ Compute FP8 quantized tensor for given scaling
   // factor.
   ops.def(
-      "static_scaled_fp8_quant(Tensor! result, Tensor input, Tensor scale, "
-      "(int, int)? group_shape=None) -> ()");
+      "static_scaled_fp8_quant(Tensor! result, Tensor input, Tensor scale) -> "
+      "()");
   ops.impl("static_scaled_fp8_quant", torch::kCUDA, &static_scaled_fp8_quant);
 
   // Compute dynamic-per-tensor FP8 quantized tensor and scaling factor.
@@ -417,6 +406,16 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _cache_ops), cache_ops) {
       "swap_blocks(Tensor src, Tensor! dst, Tensor block_mapping) -> ()");
   cache_ops.impl("swap_blocks", torch::kCUDA, &swap_blocks);
 
+  // Copy the cache blocks from src to dst.
+  cache_ops.def(
+      "copy_blocks(Tensor(a!)[] key_caches, Tensor[](b!) value_caches, "
+      "Tensor block_mapping) -> ()");
+  cache_ops.impl("copy_blocks", torch::kCUDA, &copy_blocks);
+
+  cache_ops.def(
+      "copy_blocks_mla(Tensor(a!)[] kv_caches, Tensor block_mapping) -> ()");
+  cache_ops.impl("copy_blocks_mla", torch::kCUDA, &copy_blocks_mla);
+
   // Reshape the key and value tensors and cache them.
   cache_ops.def(
       "reshape_and_cache(Tensor key, Tensor value,"
@@ -446,22 +445,6 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _cache_ops), cache_ops) {
       "                     Tensor scale) -> ()");
   cache_ops.impl("concat_and_cache_mla", torch::kCUDA, &concat_and_cache_mla);
 
-  // Rotate Q and K, then write to kv cache for MLA
-  cache_ops.def(
-      "concat_and_cache_mla_rope_fused("
-      "                     Tensor positions,"
-      "                     Tensor! q_pe,"
-      "                     Tensor! k_pe,"
-      "                     Tensor kv_c,"
-      "                     Tensor cos_sin_cache,"
-      "                     bool is_neox,"
-      "                     Tensor slot_mapping,"
-      "                     Tensor! kv_cache,"
-      "                     str kv_cache_dtype,"
-      "                     Tensor kv_cache_scale) -> ()");
-  cache_ops.impl("concat_and_cache_mla_rope_fused", torch::kCUDA,
-                 &concat_and_cache_mla_rope_fused);
-
   // Convert the key and value cache to fp8 data type.
   cache_ops.def(
       "convert_fp8(Tensor! dst_cache, Tensor src_cache, float scale, "
@@ -486,11 +469,9 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _cache_ops), cache_ops) {
   cache_ops.impl("cp_gather_cache", torch::kCUDA, &cp_gather_cache);
 
   cache_ops.def(
-      "cp_gather_and_upconvert_fp8_kv_cache(Tensor src_cache, Tensor! dst, "
-      "Tensor block_table, Tensor seq_lens, Tensor workspace_starts, int "
-      "batch_size) -> ()");
-  cache_ops.impl("cp_gather_and_upconvert_fp8_kv_cache", torch::kCUDA,
-                 &cp_gather_and_upconvert_fp8_kv_cache);
+      "indexer_k_cache(Tensor k, Tensor! kv_cache, Tensor "
+      "slot_mapping) -> ()");
+  cache_ops.impl("indexer_k_cache", torch::kCUDA, &indexer_k_cache);
 
   cache_ops.def(
       "indexer_k_quant_and_cache(Tensor k, Tensor! kv_cache, Tensor "
@@ -500,15 +481,10 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _cache_ops), cache_ops) {
                  &indexer_k_quant_and_cache);
 
   cache_ops.def(
-      "indexer_k_cache(Tensor k, Tensor! kv_cache, Tensor "
-      "slot_mapping) -> ()");
-  cache_ops.impl("indexer_k_cache", torch::kCUDA, &indexer_k_cache);
-
-   cache_ops.def(
       "cp_gather_indexer_k_cache(Tensor kv_cache, Tensor! dst_k, "
       "Tensor block_table, Tensor cu_seq_lens) -> ()");
   cache_ops.impl("cp_gather_indexer_k_cache", torch::kCUDA,
-                 &cp_gather_indexer_k_cache);                
+                 &cp_gather_indexer_k_cache);
 
   cache_ops.def(
       "cp_gather_indexer_k_quant_cache(Tensor kv_cache, Tensor! dst_k, Tensor! "

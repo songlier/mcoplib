@@ -1,5 +1,5 @@
-// 2025 - Modified by MetaX Integrated Circuits (Shanghai) Co., Ltd. All Rights Reserved.
-/*
+/* Copyright 2025 SGLang Team. All Rights Reserved.
+
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -17,6 +17,14 @@ limitations under the License.
 #include <torch/library.h>
 
 #include "sgl_kernel_ops.h"
+
+
+#if ENABLE_CUTALASS_OP
+#warning "ENABLE_OP_PROFILING is ENABLED"
+#else
+#warning "ENABLE_OP_PROFILING is DISABLED"
+#endif
+
 
 TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
 
@@ -298,7 +306,7 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
   m.impl("fused_moe_gate_opt", torch::kCUDA, &fused_moe_gate_opt);
   
   
-
+#if ENABLE_CUTALASS_OP
   m.def("cutlass_moe_mm_gemm_kernel_m_w8a8(int num_valid_tokens, int N, int K, int group) -> int");
   m.impl("cutlass_moe_mm_gemm_kernel_m_w8a8", &cutlass_moe_mm_gemm_kernel_m_w8a8);
 
@@ -306,7 +314,7 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
                             "Tensor token_ids, Tensor expert_ids, Tensor num_tokens_post_padded,"
                             "int N, int K, int EM, int num_valid_tokens, int topk, bool mul_routed_weight) -> ()");
   m.impl("cutlass_moe_mm_w8a8", torch::kCUDA, &cutlass_moe_mm_w8a8);
-
+#endif
   /*
    * From csrc/moe/cutlass_moe/w4a8
    */
@@ -599,6 +607,7 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
 
 //   m.def("ggml_moe_get_block_size(int type) -> int");
 //   m.impl("ggml_moe_get_block_size", torch::kCUDA, &ggml_moe_get_block_size);
+#if ENABLE_CUTALASS_OP
   m.def(
       "cutlass_scaled_mm(Tensor! out, Tensor a,"
       "                  Tensor b, Tensor a_scales,"
@@ -615,6 +624,7 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
       "                  Tensor? azp, Tensor? bias) -> ()",
       {stride_tag});
   m.impl("cutlass_scaled_mm_azp", torch::kCUDA, &cutlass_scaled_mm_azp);
+  #endif
 
   /*
    * From csrc/mamba
@@ -703,8 +713,7 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
       "float downscale_freq_shift,"
       "float scale,"
       "int max_period) -> Tensor");
-  m.impl("timestep_embedding", torch::kCUDA, &timestep_embedding);
-
+  m.impl("timestep_embedding", torch::kCUDA, &timestep_embedding);  
 }
 
 REGISTER_EXTENSION(common_ops)

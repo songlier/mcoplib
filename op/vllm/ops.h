@@ -101,20 +101,13 @@ void apply_repetition_penalties_(torch::Tensor& logits,
                                  const torch::Tensor& output_mask,
                                  const torch::Tensor& repetition_penalties);
 
-void top_k_per_row_prefill(const torch::Tensor& logits,
-                           const torch::Tensor& rowStarts,
-                           const torch::Tensor& rowEnds, torch::Tensor& indices,
-                           int64_t numRows, int64_t stride0, int64_t stride1,
-                           int64_t topK);
+void top_k_per_row(const torch::Tensor& logits, const torch::Tensor& rowStarts,
+                   const torch::Tensor& rowEnds, torch::Tensor& indices,
+                   int64_t numRows, int64_t stride0, int64_t stride1);
 
 void top_k_per_row_decode(const torch::Tensor& logits, int64_t next_n,
-                          const torch::Tensor& seqLens, torch::Tensor& indices,
-                          int64_t numRows, int64_t stride0, int64_t stride1,
-                          int64_t topK);
-
-void large_context_topk(const torch::Tensor& score, torch::Tensor& indices,
-                        const torch::Tensor& lengths,
-                        std::optional<torch::Tensor> row_starts_opt);
+                          const torch::Tensor& seq_lens, torch::Tensor& indices,
+                          int64_t numRows, int64_t stride0, int64_t stride1);
 
 void rms_norm_static_fp8_quant(torch::Tensor& out, torch::Tensor& input,
                                torch::Tensor& weight, torch::Tensor& scale,
@@ -251,7 +244,7 @@ int64_t ggml_moe_get_block_size(int64_t type);
         const int64_t num_experts, const int64_t n, const int64_t k,
         const std::optional<torch::Tensor>& blockscale_offsets);
 
-    void get_cutlass_batched_moe_mm_data(torch::Tensor& expert_offsets,
+    void get_cutlass_pplx_moe_mm_data(torch::Tensor& expert_offsets,
                                     torch::Tensor& problem_sizes1,
                                     torch::Tensor& problem_sizes2,
                                     const torch::Tensor& expert_num_tokens,
@@ -296,6 +289,10 @@ void dynamic_scaled_int8_quant(torch::Tensor& out, torch::Tensor const& input,
                                torch::Tensor& scales,
                                std::optional<torch::Tensor> const& azp);
 
+void fused_silu_mul_dq_mask_quant_pack(torch::Tensor& out,
+                                       torch::Tensor const& input,
+                                       torch::Tensor const& mask);
+
 torch::Tensor gptq_gemm(torch::Tensor a, torch::Tensor b_q_weight,
                         torch::Tensor b_gptq_qzeros,
                         torch::Tensor b_gptq_scales, torch::Tensor b_g_idx,
@@ -305,9 +302,8 @@ torch::Tensor gptq_gemm(torch::Tensor a, torch::Tensor b_q_weight,
 
 void gptq_shuffle(torch::Tensor q_weight, torch::Tensor q_perm, int64_t bit);
 
-void static_scaled_fp8_quant(
-    torch::Tensor& out, torch::Tensor const& input, torch::Tensor const& scale,
-    std::optional<std::tuple<int64_t, int64_t>> group_shape = std::nullopt);
+void static_scaled_fp8_quant(torch::Tensor& out, torch::Tensor const& input,
+                             torch::Tensor const& scale);
 
 void dynamic_scaled_fp8_quant(torch::Tensor& out, torch::Tensor const& input,
                               torch::Tensor& scale);
@@ -327,6 +323,3 @@ void selective_scan_fwd(const torch::Tensor& u, const torch::Tensor& delta,
                         const std::optional<torch::Tensor>& cache_indices,
                         const std::optional<torch::Tensor>& has_initial_state,
                         const torch::Tensor& ssm_states, int64_t pad_slot_id);
-
-void dsv3_fused_a_gemm(torch::Tensor& output, torch::Tensor const& mat_a,
-                       torch::Tensor const& mat_b);

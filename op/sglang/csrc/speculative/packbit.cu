@@ -1,6 +1,7 @@
-// 2025 - Modified by MetaX Integrated Circuits (Shanghai) Co., Ltd. All Rights Reserved.
 // This is only a plugin used for flashinfer 0.1.6. The new version does not need it.
 /*
+ * Copyright (c) 2025 by SGLang team.
+ * Copyright (c) 2025 by FlashInfer team.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
