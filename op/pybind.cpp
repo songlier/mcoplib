@@ -1,4 +1,3 @@
-// Copyright (c) 2025 MetaX Integrated Circuits (Shanghai) Co., Ltd. All rights reserved.
 #include <pybind11/pybind11.h>
 #include <torch/extension.h>
 #include <torch/serialize/tensor.h>
@@ -24,9 +23,7 @@
 #include "../include/fused_add_layernorm_per_token_quant_padding_output.h"
 #include "../include/rms_norm_dynamic_per_token_quant.h"
 #include "../include/fused_moe_gate_deepseek.h"
-#include "../include/glm_attention_prepare.h"
 #include "gptq_marlin.h"
-#include "fused_moe_gate_opt.h"
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fused_bias_dropout", &fused_bias_dropout);
@@ -52,7 +49,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("scale_dynamic_quant", &scale_dynamic_quant);
     m.def("rotary_pos_emb_forward", &rotary_pos_emb_forward);
     m.def("rotary_pos_emb_backward", &rotary_pos_emb_backward);
-    m.def("FusedAttentionPrepare", &FusedAttentionPrepare);
     m.def("fused_add_rms_norm_dynamic_per_token_quant_padding_output", &add_rms_norm_dynamic_per_token_quant_padding_output);
     m.def("rms_norm_dynamic_per_token_quant_custom", &rms_norm_dynamic_per_token_quant_custom);
     
@@ -60,7 +56,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("recv_from_attention_node_post_process", &recv_from_attention_node_post_process);
     m.def("send_to_attention_node_pre_process", &send_to_attention_node_pre_process);
     m.def("fused_silu_mul_dq_mask_quant", &fused_silu_mul_dq_mask_quant_pack);
-    m.def("fused_silu_mul_dq_mask_fp8_quant", &fused_silu_mul_dq_mask_quant_fp8_pack);
     m.def("fused_silu_mul_dq_reorder_quant", &fused_silu_mul_dq_quant_reordered_topk_interface);
 
     py::object torch_bfloat16 = py::module::import("torch").attr("bfloat16");
@@ -90,18 +85,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("num_fused_shared_experts"),
         py::arg("scale_factor"),
         py::arg("moegate_type").none(true)
-    );
-
-    m.def("fused_moe_gate_opt", &fused_moe_gate_opt, "Fused MoE Gate optimized kernel",
-        py::arg("gating_outputs"),
-        py::arg("correction_bias"),
-        py::arg("out_routing_weights"),
-        py::arg("out_selected_experts"),
-        py::arg("topk"),
-        py::arg("renormalize"),
-        py::arg("num_expert_group"),
-        py::arg("topk_group"),
-        py::arg("num_fused_shared_experts") = py::none(),  // 设置默认值为 None
-        py::arg("routed_scaling_factor") = py::none()      // 设置默认值为 None
     );
 }

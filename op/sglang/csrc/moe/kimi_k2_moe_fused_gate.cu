@@ -1,4 +1,3 @@
-// 2025 - Modified by MetaX Integrated Circuits (Shanghai) Co., Ltd. All Rights Reserved.
 #include <ATen/cuda/CUDAContext.h>
 #include <cuda_runtime.h>
 #include <torch/all.h>
@@ -127,9 +126,6 @@ __global__ void kimi_k2_moe_fused_gate_kernel_small_token(
       if (expert_id >= 0 && expert_id < NUM_EXPERTS) {
         output_ptr[row_idx * topk + k] = shared_original_scores[expert_id];
         indices_ptr[row_idx * topk + k] = expert_id;
-      } else {
-        output_ptr[row_idx * topk + k] = 0.0f;
-        indices_ptr[row_idx * topk + k] = 0;
       }
     }
 
@@ -223,16 +219,11 @@ __global__ void kimi_k2_moe_fused_gate_kernel(
       }
     }
 
-    if (lane_id == 0) {
+    if (lane_id == 0 && max_expert != -1) {
       int64_t output_idx = row_idx * topk + k;
-      if (max_expert != -1) {
-        output_ptr[output_idx] = warp_original_scores[max_expert];
-        indices_ptr[output_idx] = max_expert;
-        warp_scores[max_expert] = -FLT_MAX;
-      } else {
-        output_ptr[output_idx] = 0.0f;
-        indices_ptr[output_idx] = 0;
-      }
+      output_ptr[output_idx] = warp_original_scores[max_expert];
+      indices_ptr[output_idx] = max_expert;
+      warp_scores[max_expert] = -FLT_MAX;
     }
 
     __syncwarp();
