@@ -1,4 +1,4 @@
-// 2025 - Modified by MetaX Integrated Circuits (Shanghai) Co., Ltd. All Rights Reserved.
+
 #include <torch/extension.h>
 #include <torch/torch.h>
 #include <ATen/ATen.h>

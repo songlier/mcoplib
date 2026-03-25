@@ -43,7 +43,7 @@ CMAKE_EXECUTABLE = 'cmake' if not USE_MACA else 'cmake_maca'
 #Python 当前解释器的扩展后缀
 ext_suffix = sysconfig.get_config_var('EXT_SUFFIX') or '.so'
 name="mcoplib"
-mcoplib_version="0.4.2"
+mcoplib_version="0.2.0"
 
 
 
@@ -82,6 +82,7 @@ def is_url_available(url: str) -> bool:
 # def get_nvcc_cuda_version() -> Version:
 #     """Get the CUDA version from nvcc.
 
+#     Adapted from https://github.com/NVIDIA/apex/blob/8b7a1ff183741dd8f9b87e7bafd04cfde99cea28/setup.py
 #     """
 #     assert CUDA_HOME is not None, "CUDA_HOME is not set"
 #     nvcc_output = subprocess.check_output([CUDA_HOME + "/bin/nvcc", "-V"],
@@ -612,9 +613,9 @@ def write_git_info_file(target_path):
                 f'Build_Maca_Version = {maca_version!r}\n'
                 f'GIT_BRANCH = {branch!r}\n'
                 f'GIT_COMMIT = {commit!r}\n'
-                f'Vllm Op Version = 0.17.0\n'
-                f'SGlang Op Version  = 0.5.8 && 0.5.9\n'
-            )
+                f'Vllm Op Version = 0.11.2\n'
+                f'SGlang Op Version  = 0.5.6\n'
+            )         
     os.makedirs(os.path.dirname(target_path), exist_ok=True)
     with open(target_path, "w", encoding="utf-8") as f:
         f.write(content)
@@ -634,6 +635,10 @@ if os.environ.get("BUILD_SGLANG_SUBMODULE", "ON") == "ON" :
     ext_modules.append(CMakeExtension(name="mcoplib.sgl_grouped_gemm_cuda"))
     ext_modules.append(CMakeExtension(name="mcoplib.sgl_moe_fused_w4a16"))
     ext_modules.append(CMakeExtension(name="mcoplib.sgl_grouped_gemm_mctlass_int8"))
+
+if os.environ.get("BUILD_VLLM_SUBMODULE", "ON") == "ON" :
+    ext_modules.append(CMakeExtension(name="mcoplib._moe_C"))
+    ext_modules.append(CMakeExtension(name="mcoplib._C"))
 
 if os.environ.get("BUILD_VLLM_SUBMODULE", "ON") == "ON" :
     ext_modules.append(CMakeExtension(name="mcoplib._moe_C"))

@@ -1,6 +1,7 @@
+// 2026 - Modified by MetaX Integrated Circuits (Shanghai) Co., Ltd. All Rights Reserved.
 /*
  * Adapted from
- * https://github.com/NVIDIA/TensorRT-LLM/blob/v1.3.0rc2/cpp/tensorrt_llm/kernels/noAuxTcKernels.cu
+ * https://github.com/NVIDIA/TensorRT-LLM/blob/v0.21.0/cpp/tensorrt_llm/kernels/noAuxTcKernels.cu
  * Copyright (c) 2025, The vLLM team.
  * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION &
  * AFFILIATES. All rights reserved. SPDX-License-Identifier: Apache-2.0
@@ -17,10 +18,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "moeTopKFuncs.cuh"
 #include <c10/cuda/CUDAStream.h>
 #include <torch/all.h>
-#include <cmath>
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
 #include <cuda/std/limits>
@@ -28,21 +27,73 @@
 #include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
 
+template<typename T>
+__device__ __forceinline__ T arithm_add(T a, T b) {
+    return a + b;
+}
+
+template<>
+__device__ __forceinline__ half arithm_add(half a, half b) {
+    return __hadd(a, b);
+}
+
+template<>
+__device__ __forceinline__ maca_bfloat16 arithm_add(maca_bfloat16 a, maca_bfloat16 b) {
+    return __hadd(a, b);
+}
+
+template<typename T>
+__device__ __forceinline__ bool gt(T a, T b) {
+    return a > b;
+}
+
+template<>
+__device__ __forceinline__ bool gt<half>(half a, half b) {
+    return __hgt(a, b);
+}
+
+template<>
+__device__ __forceinline__ bool gt<maca_bfloat16>(maca_bfloat16 a, maca_bfloat16 b) {
+    return __hgt(a, b);
+}
+
+template<typename T>
+__device__ __forceinline__ bool equal(T a, T b) {
+    return a == b;
+}
+
+template<>
+__device__ __forceinline__ bool equal<half>(half a, half b) {
+    return __hequ(a, b);
+}
+
+template<>
+__device__ __forceinline__ bool equal<maca_bfloat16>(maca_bfloat16 a, maca_bfloat16 b) {
+    return __hequ(a, b);
+}
+
+template<typename T>
+__device__ __forceinline__ bool notequal(T a, T b) {
+    return a != b;
+}
+
+template<>
+__device__ __forceinline__ bool notequal<half>(half a, half b) {
+    return __hne(a, b);
+}
+
+template<>
+__device__ __forceinline__ bool notequal<maca_bfloat16>(maca_bfloat16 a, maca_bfloat16 b) {
+    return __hne(a, b);
+}
+
 namespace vllm {
 namespace moe {
 
 constexpr unsigned FULL_WARP_MASK = 0xffffffff;
-static constexpr int WARP_SIZE = 32;
-static constexpr int NumNemotronExperts = 512;
-static constexpr int NumKimiK2Experts = 384;
-static constexpr int NumDeepseekExperts = 256;
-static constexpr int MaxSupportedExpertCount =
-    std::max({NumNemotronExperts, NumKimiK2Experts, NumDeepseekExperts});
-static constexpr int MaxNumExpertsUnit = 128;
-static constexpr int NumTopGroupScores = 2;
-static constexpr int DefaultMaxNumTopExperts = 8;
-static constexpr int MaxSupportedTopExperts = 22;
-static constexpr int MaxNumTopGroups = 4;
+constexpr int32_t WARP_SIZE = 32;
+constexpr int32_t BLOCK_SIZE = 512;
+constexpr int32_t NUM_WARPS_PER_BLOCK = BLOCK_SIZE / WARP_SIZE;
 
 namespace warp_topk {
 
@@ -59,40 +110,28 @@ constexpr __host__ __device__ bool isPowerOf2(T v) {
   return (v && !(v & (v - 1)));
 }
 
-// template <bool greater, typename T>
-// __forceinline__ __device__ bool is_better_than(T val, T baseline) {
-//   return (val > baseline && greater) || (val < baseline && !greater);
-// }
-
-// template <bool greater, typename T, typename idxT>
-// __forceinline__ __device__ bool is_better_than(T val, T baseline, idxT index,
-//                                                idxT baseline_index) {
-//   bool res = (val > baseline && greater) || (val < baseline && !greater);
-//   if (val == baseline) {
-//     res = (index < baseline_index && greater) ||
-//           (index < baseline_index && !greater);
-//   }
-//   return res;
-// }
-
 template <bool greater, typename T>
 __forceinline__ __device__ bool is_better_than(T val, T baseline) {
-  float f_val = static_cast<float>(val);
-  float f_baseline = static_cast<float>(baseline);
-  return (f_val > f_baseline && greater) || (f_val < f_baseline && !greater);
+  return (gt(val , baseline) && greater) || (gt(baseline,val) && !greater);
 }
 
 template <bool greater, typename T, typename idxT>
 __forceinline__ __device__ bool is_better_than(T val, T baseline, idxT index,
                                                idxT baseline_index) {
-  float f_val = static_cast<float>(val);
-  float f_baseline = static_cast<float>(baseline);
-  bool res = (f_val > f_baseline && greater) || (f_val < f_baseline && !greater);
-  if (f_val == f_baseline) {
+  bool res = (gt(val , baseline) && greater) || (gt(baseline, val) && !greater);
+  if (equal(val, baseline)) {
     res = (index < baseline_index && greater) ||
           (index < baseline_index && !greater);
   }
   return res;
+}
+
+template <typename T, typename idxT>
+int calc_smem_size_for_block_wide(int num_of_warp, int64_t k) {
+  int64_t cache_topk = (sizeof(T) + sizeof(idxT)) * num_of_warp * k;
+  int64_t n = std::max<int>(num_of_warp / 2 * k, num_of_warp * WARP_SIZE);
+  return max(cache_topk,
+             round_up_to_multiple_of<256>(n * sizeof(T)) + n * sizeof(idxT));
 }
 
 template <int size, bool ascending, bool reverse, typename T, typename idxT,
@@ -168,38 +207,20 @@ struct BitonicSort<32, ascending, T, idxT, is_stable> {
         T other = __shfl_xor_sync(FULL_WARP_MASK, *val_arr, stride);
         idxT other_idx = __shfl_xor_sync(FULL_WARP_MASK, *idx_arr, stride);
 
-        // bool is_better;
-        // if constexpr (is_stable) {
-        //   if constexpr (ascending) {
-        //     is_better = ((*val_arr > other) ||
-        //                  ((*val_arr == other) && (*idx_arr < other_idx))) !=
-        //                 (reverse != is_second);
-        //   } else {
-        //     is_better = ((*val_arr > other) ||
-        //                  ((*val_arr == other) && (*idx_arr > other_idx))) !=
-        //                 (reverse != is_second);
-        //   }
-        // } else {
-        //   is_better = (*val_arr != other &&
-        //                (*val_arr > other) != (reverse != is_second));
-        // }
         bool is_better;
-        float f_val = static_cast<float>(*val_arr);
-        float f_other = static_cast<float>(other);
-
         if constexpr (is_stable) {
           if constexpr (ascending) {
-            is_better = ((f_val > f_other) ||
-                         ((f_val == f_other) && (*idx_arr < other_idx))) !=
+            is_better = (gt(*val_arr,other) ||
+                         (equal(*val_arr, other) && gt(other_idx,*idx_arr))) !=
                         (reverse != is_second);
           } else {
-            is_better = ((f_val > f_other) ||
-                         ((f_val == f_other) && (*idx_arr > other_idx))) !=
+            is_better = (gt(*val_arr, other) ||
+                         (equal(*val_arr , other) && gt(*idx_arr, other_idx))) !=
                         (reverse != is_second);
           }
         } else {
-          is_better = (f_val != f_other &&
-                       (f_val > f_other) != (reverse != is_second));
+          is_better = (notequal(*val_arr , other) &&
+                       gt(*val_arr , other) != (reverse != is_second));
         }
         if (is_better) {
           *val_arr = other;
@@ -226,39 +247,20 @@ struct BitonicMerge<32, ascending, reverse, T, idxT, is_stable> {
       idxT& idx = *idx_arr;
       idxT other_idx = __shfl_xor_sync(FULL_WARP_MASK, idx, stride);
 
-      // bool is_better;
-      // if constexpr (is_stable) {
-      //   if constexpr (ascending) {
-      //     is_better = ((*val_arr > other) ||
-      //                  ((*val_arr == other) && (*idx_arr < other_idx))) ==
-      //                 (reverse != is_second);  // for min
-      //   } else {
-      //     is_better = ((*val_arr > other) ||
-      //                  ((*val_arr == other) && (*idx_arr > other_idx))) ==
-      //                 (reverse != is_second);  // for max
-      //   }
-      // } else {
-      //   is_better =
-      //       (val != other && ((val > other) == (ascending != is_second)));
-      // }
       bool is_better;
-      float f_val = static_cast<float>(*val_arr);
-      float f_other = static_cast<float>(other);
-
       if constexpr (is_stable) {
         if constexpr (ascending) {
-          is_better = ((f_val > f_other) ||
-                       ((f_val == f_other) && (*idx_arr < other_idx))) ==
-                      (reverse != is_second);  // for min
+          is_better = (gt(*val_arr , other) ||
+                       (equal(*val_arr , other) && gt(other_idx,*idx_arr))) ==
+                      notequal(reverse , is_second);  // for min
         } else {
-          is_better = ((f_val > f_other) ||
-                       ((f_val == f_other) && (*idx_arr > other_idx))) ==
-                      (reverse != is_second);  // for max
+          is_better = (gt(*val_arr , other) ||
+                       (equal(*val_arr , other) && gt(*idx_arr , other_idx))) ==
+                      notequal(reverse , is_second);  // for max
         }
       } else {
-        // 注意：原代码的 val 其实就是 *val_arr 的引用，所以用 f_val 替代是安全的
         is_better =
-            (f_val != f_other && ((f_val > f_other) == (ascending != is_second)));
+            (notequal(val , other) && (gt(val, other) == (ascending != is_second)));
       }
 
       if (is_better) {
@@ -326,15 +328,6 @@ class WarpSort {
     }
   }
 
-  // Accessors for per-lane selected value/index.
-  // NOTE: For the common case `capacity == WARP_SIZE`, `max_arr_len_ == 1`
-  // and callers should use `i == 0`.
-  __device__ __forceinline__ idxT get_idx(int i = 0) const {
-    return idx_arr_[i];
-  }
-
-  __device__ __forceinline__ T get_val(int i = 0) const { return val_arr_[i]; }
-
  protected:
   static constexpr int max_arr_len_ = capacity / WARP_SIZE;
 
@@ -353,7 +346,6 @@ class WarpSelect : public WarpSort<capacity, greater, T, idxT, is_stable> {
   __device__ WarpSelect(idxT k, T dummy)
       : WarpSort<capacity, greater, T, idxT, is_stable>(k, dummy),
         k_th_(dummy),
-        k_th_idx_(0),
         k_th_lane_((k - 1) % WARP_SIZE) {
     extern __shared__ char smem_buf[];  // extern __shared__ T smem_buf[];
 
@@ -415,6 +407,9 @@ class WarpSelect : public WarpSort<capacity, greater, T, idxT, is_stable> {
       idxT idx = (lane_ < smem_buf_len_) ? idx_smem_[lane_] : 0;
       merge_buf_(val, idx);
     }
+
+    // after done(), smem is used for merging results among warps
+    __syncthreads();
   }
 
  private:
@@ -473,7 +468,7 @@ __device__ inline T_OUT cuda_cast(T_IN val) {
 }
 
 template <>
-__device__ inline float cuda_cast<float, __nv_bfloat16>(__nv_bfloat16 val) {
+__device__ inline float cuda_cast<float, maca_bfloat16>(maca_bfloat16 val) {
   return __bfloat162float(val);
 }
 
@@ -510,564 +505,318 @@ __device__ inline T apply_sigmoid(T val) {
   return cuda_cast<T, float>(sigmoid_accurate(f));
 }
 
-template <ScoringFunc SF, typename T>
-__device__ inline T apply_scoring(T val) {
-  if constexpr (SF == SCORING_NONE) {
-    return val;
-  } else if constexpr (SF == SCORING_SIGMOID) {
-    return apply_sigmoid(val);
-  } else {
-    static_assert(SF == SCORING_NONE || SF == SCORING_SIGMOID,
-                  "Unsupported ScoringFunc in apply_scoring");
-    return val;
-  }
-}
-
-template <typename T, typename BiasT, ScoringFunc SF>
-__device__ void topk_with_k2(T* output, T const* input, BiasT const* bias,
+template <typename T>
+__device__ void topk_with_k2(T* output, T const* input, T const* bias,
                              cg::thread_block_tile<32> const& tile,
                              int32_t const lane_id,
-                             int const num_experts_per_group) {
+                             int const num_experts_per_group,
+                             int const scoring_func) {
   // Get the top2 per thread
   T largest = neg_inf<T>();
   T second_largest = neg_inf<T>();
 
   if (num_experts_per_group > WARP_SIZE) {
     for (int i = lane_id; i < num_experts_per_group; i += WARP_SIZE) {
-      T value = apply_scoring<SF>(input[i]);
-      value = static_cast<T>(static_cast<float>(value) + static_cast<float>(bias[i]));
-      //value = value + static_cast<T>(bias[i]);
+      T value = input[i];
+      // Apply scoring function if needed
+      if (scoring_func == SCORING_SIGMOID) {
+        value = apply_sigmoid(value);
+      }
+    //   value = value + (T)(bias[i]);
+    value = arithm_add(value, bias[i]);
 
-      if (static_cast<float>(value) > static_cast<float>(largest)) {
+    //   if (value > largest) {
+    if(gt<T>(value, largest)) {
         second_largest = largest;
         largest = value;
-      } else if (static_cast<float>(value) > static_cast<float>(second_largest)) {
+      } else if (gt<T>(value, second_largest)) {
         second_largest = value;
       }
     }
   } else {
     for (int i = lane_id; i < num_experts_per_group; i += WARP_SIZE) {
-      T value = apply_scoring<SF>(input[i]);
-      value = static_cast<T>(static_cast<float>(value) + static_cast<float>(bias[i]));
+      T value = input[i];
+      // Apply scoring function if needed
+      if (scoring_func == SCORING_SIGMOID) {
+        value = apply_sigmoid(value);
+      }
+    //   value = value + bias[i];
+      value = arithm_add(value, bias[i]);
       largest = value;
     }
   }
 
-
-  //float max1_f = cg::reduce(tile, static_cast<float>(largest), cg::greater<float>());
-  T max1 = static_cast<T>(cg::reduce(tile, static_cast<float>(largest), cg::greater<float>()));
-
+  __syncwarp();  // Ensure all threads have valid data before reduction
+  // Get the top2 warpwise
+  float largest_f = (float)largest;
+  float max1_f = cg::reduce(tile, largest_f, cg::greater<float>());
+  T max1 = (T)max1_f;
   T max2 = max1;
-  bool equal_to_max1 = (static_cast<float>(max1) == static_cast<float>(largest));
+  float max2_f = (float)max2;
+  bool equal_to_max1 = equal(max1 , largest);
 
   int count_max1 = __popc(__ballot_sync(FULL_WARP_MASK, equal_to_max1));
 
   if (count_max1 == 1) {
-    largest = (static_cast<float>(largest) == static_cast<float>(max1)) ? second_largest : largest;
-    max2 = static_cast<T>(cg::reduce(tile, static_cast<float>(largest), cg::greater<float>()));
-    //max2 = static_cast<T>(max2_f);
+    largest = equal(largest, max1) ? second_largest : largest;
+    largest_f = (float)largest;
+    max2_f = cg::reduce(tile, largest_f, cg::greater<float>());
+    max2 = (T)max2_f;
   }
 
-
   if (lane_id == 0) {
-    *output = static_cast<T>(static_cast<float>(max1) + static_cast<float>(max2));
+    *output = arithm_add(max1 , max2);
   }
 }
 
-template <typename T, typename BiasT, typename IdxT, ScoringFunc SF>
-__global__ void grouped_topk_fused_kernel(
-    T* scores, float* topk_values, IdxT* topk_indices, BiasT const* bias,
-    int64_t const num_tokens, int64_t const num_experts, int64_t const n_group,
-    int64_t const topk_group, int64_t const topk, bool renormalize,
-    double routed_scaling_factor) {
-  int32_t const token_id = static_cast<int32_t>(blockIdx.x);
-  if (token_id >= num_tokens) {
-    return;
+template <typename T>
+__global__ void topk_with_k2_kernel(T* output, T* input, T const* bias,
+                                    int64_t const num_tokens,
+                                    int64_t const num_cases,
+                                    int64_t const n_group,
+                                    int64_t const num_experts_per_group,
+                                    int const scoring_func) {
+  int32_t warp_id = threadIdx.x / WARP_SIZE;
+  int32_t lane_id = threadIdx.x % WARP_SIZE;
+
+  int32_t case_id = blockIdx.x * NUM_WARPS_PER_BLOCK + warp_id;
+  if (case_id < num_cases) {
+    input += case_id * num_experts_per_group;
+    // bias is per expert group, offset to current group
+    int32_t group_id = case_id % n_group;
+    T const* group_bias = bias + group_id * num_experts_per_group;
+    output += case_id;
+
+    cg::thread_block block = cg::this_thread_block();
+    cg::thread_block_tile<32> tile = cg::tiled_partition<32>(block);
+
+// #if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+//     asm volatile("griddepcontrol.wait;");
+// #endif
+    topk_with_k2(output, input, group_bias, tile, lane_id,
+                 num_experts_per_group, scoring_func);
   }
+// #if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+//   asm volatile("griddepcontrol.launch_dependents;");
+// #endif
+}
 
-  int32_t const warp_id = threadIdx.x / WARP_SIZE;
-  int32_t const lane_id = threadIdx.x % WARP_SIZE;
+template <typename T, typename IdxT>
+__global__ void group_idx_and_topk_idx_kernel(
+    T* scores, T const* group_scores, float* topk_values, IdxT* topk_indices,
+    T const* bias, int64_t const num_tokens, int64_t const n_group,
+    int64_t const topk_group, int64_t const topk, int64_t const num_experts,
+    int64_t const num_experts_per_group, bool renormalize,
+    double routed_scaling_factor, int scoring_func) {
+  int32_t warp_id = threadIdx.x / WARP_SIZE;
+  int32_t lane_id = threadIdx.x % WARP_SIZE;
+  int32_t case_id =
+      blockIdx.x * NUM_WARPS_PER_BLOCK + warp_id;  // one per token
+  scores += case_id * num_experts;
+  group_scores += case_id * n_group;
+  topk_values += case_id * topk;
+  topk_indices += case_id * topk;
 
-  int32_t const n_group_i32 = static_cast<int32_t>(n_group);
-  int32_t const topk_group_i32 = static_cast<int32_t>(topk_group);
-  int32_t const topk_i32 = static_cast<int32_t>(topk);
-  int32_t const num_experts_i32 = static_cast<int32_t>(num_experts);
-
-  int32_t const num_warps = blockDim.x / WARP_SIZE;
-  if (warp_id >= n_group_i32 || num_warps < n_group_i32) {
-    return;
-  }
-
-  int32_t const num_experts_per_group = num_experts_i32 / n_group_i32;
-
-  T* scores_token = scores + static_cast<int64_t>(token_id) * num_experts;
+  int32_t align_num_experts_per_group =
+      warp_topk::round_up_to_multiple_of<WARP_SIZE>(num_experts_per_group);
 
   cg::thread_block block = cg::this_thread_block();
   cg::thread_block_tile<32> tile = cg::tiled_partition<32>(block);
 
-  extern __shared__ char smem_buf[];
-  // warpSelect internal staging buffer layout
-  size_t const val_bytes =
-      static_cast<size_t>(num_warps) * WARP_SIZE * sizeof(T);
-  size_t const val_bytes_aligned =
-      warp_topk::round_up_to_multiple_of<256>(val_bytes);
-  size_t const idx_bytes =
-      static_cast<size_t>(num_warps) * WARP_SIZE * sizeof(int32_t);
-  size_t const internal_bytes = val_bytes_aligned + idx_bytes;
+  extern __shared__ char smem_buf[];  // NOTE: reuse the shared memory here to
+                                      // store the target topk idx
+  int32_t* s_topk_idx = reinterpret_cast<int32_t*>(smem_buf);
+  T* s_topk_value =
+      reinterpret_cast<T*>(s_topk_idx + NUM_WARPS_PER_BLOCK * topk) +
+      warp_id * topk;
+  s_topk_idx += warp_id * topk;
 
-  // user-managed shared memory starts after warpSelect internal staging.
-  uintptr_t ptr_u = reinterpret_cast<uintptr_t>(smem_buf + internal_bytes);
-  ptr_u = (ptr_u + 15) & ~static_cast<uintptr_t>(15);  // align to 16B
-  T* s_group_scores = reinterpret_cast<T*>(ptr_u);
+  T value = neg_inf<T>();
+  T topk_group_value = neg_inf<T>();
+  int32_t num_equalto_topkth_group;
 
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
-  asm volatile("griddepcontrol.wait;");  // I think all prolog can be put before
-                                         // acqbulk because it's ptr arithmetic
-#endif
+// #if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+//   asm volatile("griddepcontrol.wait;");  // I think all prolog can be put before
+//                                          // acqbulk because it's ptr arithmetic
+// #endif
 
-  // phase 1: per-group scan
-  int32_t const group_offset = warp_id * num_experts_per_group;
-  topk_with_k2<T, BiasT, SF>(s_group_scores + warp_id,
-                             scores_token + group_offset, bias + group_offset,
-                             tile, lane_id, num_experts_per_group);
+  if (case_id < num_tokens) {
+    // calculate group_idx
+    int32_t target_num_min = WARP_SIZE - n_group + topk_group;
+    // The check is necessary to avoid abnormal input
+    if (lane_id < n_group && is_finite(group_scores[lane_id])) {
+      value = group_scores[lane_id];
+    }
 
+    int count_equal_to_top_value = WARP_SIZE - n_group;
+    int pre_count_equal_to_top_value = 0;
+    // Use loop to find the largset top_group
+    while (count_equal_to_top_value < target_num_min) {
+      __syncwarp();  // Ensure all threads have valid data before reduction
+      float value_f = (float)value;
+      float topk_group_value_f = cg::reduce(tile, value_f, cg::greater<float>());
+      topk_group_value = (T)topk_group_value_f;
+      if (equal(value , topk_group_value)) {
+        value = neg_inf<T>();
+      }
+      pre_count_equal_to_top_value = count_equal_to_top_value;
+      count_equal_to_top_value =
+          __popc(__ballot_sync(FULL_WARP_MASK, equal(value , neg_inf<T>())));
+    }
+    num_equalto_topkth_group = target_num_min - pre_count_equal_to_top_value;
+  }
   __syncthreads();
 
-  // phase 2: warp0 selects groups + merges candidates to final topk
-  if (warp_id != 0) {
-    return;
-  }
-
-  topk_values += static_cast<int64_t>(token_id) * topk;
-  topk_indices += static_cast<int64_t>(token_id) * topk;
-
-  // select topk_group groups by group score
   warp_topk::WarpSelect</*capability*/ WARP_SIZE, /*greater*/ true, T, int32_t,
                         /* is_stable */ true>
-      group_sel(static_cast<int32_t>(topk_group_i32), neg_inf<T>());
+      queue((int32_t)topk, neg_inf<T>());
 
-  // all lanes must participate in WarpSelect::add().
-  T gscore = (lane_id < n_group_i32) ? s_group_scores[lane_id] : neg_inf<T>();
-  group_sel.add(gscore, lane_id);
-  group_sel.done();
-
-  // proceed only if the k-th selected group score is not -inf
-  bool proceed = false;
-  if (topk_group_i32 > 0) {
-    int const kth_lane = topk_group_i32 - 1;
-    // broadcast the k-th selected group score to all lanes
-    T kth_val = __shfl_sync(FULL_WARP_MASK, group_sel.get_val(0), kth_lane);
-    proceed = (static_cast<float>(kth_val) != static_cast<float>(neg_inf<T>()));
-  }
-
-  if (!proceed) {
-    for (int i = lane_id; i < topk_i32; i += WARP_SIZE) {
-      topk_indices[i] = static_cast<IdxT>(i);
-      topk_values[i] = 1.0f / static_cast<float>(topk_i32);
-    }
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
-    asm volatile("griddepcontrol.launch_dependents;");
-#endif
-    return;
-  }
-
-  // merge per-group topk candidates for selected groups, then select topk
-  warp_topk::WarpSelect</*capability*/ WARP_SIZE, /*greater*/ true, T, int32_t,
-                        /* is_stable */ true>
-      expert_sel(static_cast<int32_t>(topk_i32), neg_inf<T>());
-
-  // selected group ids reside in lanes [0, topk_group)
-  int32_t sel_gid_lane = (lane_id < topk_group_i32) ? group_sel.get_idx(0) : 0;
-
-  // add candidates from selected groups to expert_sel
-  for (int32_t g = 0; g < topk_group_i32; ++g) {
-    int32_t gid = __shfl_sync(FULL_WARP_MASK, sel_gid_lane, g);
-    int32_t const offset = gid * num_experts_per_group;
-    int32_t const align_num_experts_per_group =
-        warp_topk::round_up_to_multiple_of<WARP_SIZE>(num_experts_per_group);
-    for (int32_t i = lane_id; i < align_num_experts_per_group; i += WARP_SIZE) {
-      // all lanes must call `add()` the same number of times.
-      T cand = neg_inf<T>();
-      int32_t idx = 0;
-      if (i < num_experts_per_group) {
-        idx = offset + i;
-        T input = scores_token[idx];
-        if (is_finite(input)) {
-          T score = apply_scoring<SF>(input);
-          cand = static_cast<T>(static_cast<float>(score) + static_cast<float>(bias[idx]));
-          //cand = score + static_cast<T>(bias[idx]);
+  int count_equalto_topkth_group = 0;
+  bool if_proceed_next_topk = notequal(topk_group_value , neg_inf<T>());
+  if (case_id < num_tokens && if_proceed_next_topk) {
+    for (int i_group = 0; i_group < n_group; i_group++) {
+      if (gt(group_scores[i_group] , topk_group_value) ||
+          (equal(group_scores[i_group] , topk_group_value) &&
+           gt(num_equalto_topkth_group,count_equalto_topkth_group))) {
+        int32_t offset = i_group * num_experts_per_group;
+        for (int32_t i = lane_id; i < align_num_experts_per_group;
+             i += WARP_SIZE) {
+          T candidates = neg_inf<T>();
+          if (i < num_experts_per_group) {
+            // Apply scoring function (if any) and add bias
+            T input = scores[offset + i];
+            if (is_finite(input)) {
+              T score = (scoring_func == SCORING_SIGMOID) ? apply_sigmoid(input)
+                                                          : input;
+              candidates = arithm_add(score, bias[offset + i]);
+            }
+          }
+          queue.add(candidates, offset + i);
+        }
+        if (equal(group_scores[i_group],topk_group_value)) {
+          count_equalto_topkth_group++;
         }
       }
-      expert_sel.add(cand, idx);
+    }
+    queue.done();
+    __syncwarp();
+    // Get the topk_idx
+    queue.dumpIdx(s_topk_idx);
+    __syncwarp();
+  }
+
+  // Load the valid score value
+  // Calculate the summation
+  float topk_sum = 1e-20;
+  if (case_id < num_tokens && if_proceed_next_topk) {
+    for (int i = lane_id;
+         i < warp_topk::round_up_to_multiple_of<WARP_SIZE>(topk);
+         i += WARP_SIZE) {
+      T value = cuda_cast<T, float>(0.0f);
+      if (i < topk) {
+        // Load the score value (without bias) for normalization
+        T input = scores[s_topk_idx[i]];
+        value =
+            (scoring_func == SCORING_SIGMOID) ? apply_sigmoid(input) : input;
+        s_topk_value[i] = value;
+      }
+      topk_sum +=
+          cg::reduce(tile, cuda_cast<float, T>(value), cg::plus<float>());
     }
   }
-  expert_sel.done();
 
-  // compute unbiased routing weights + optional renorm.
-  float lane_unbiased = 0.0f;
-  IdxT lane_idx = 0;
-  if (lane_id < topk_i32) {
-    lane_idx = static_cast<IdxT>(expert_sel.get_idx(0));
-    T in = scores_token[static_cast<int32_t>(lane_idx)];
-    lane_unbiased = cuda_cast<float, T>(apply_scoring<SF>(in));
-  }
-
-  float topk_sum = 1e-20f;
-  if (renormalize) {
-    topk_sum += cg::reduce(tile, lane_unbiased, cg::plus<float>());
-  }
-
-  float scale = static_cast<float>(routed_scaling_factor);
-  if (renormalize) {
-    scale /= topk_sum;
-  }
-
-  if (lane_id < topk_i32) {
-    topk_indices[lane_id] = lane_idx;
-    topk_values[lane_id] = lane_unbiased * scale;
-  }
-
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
-  asm volatile("griddepcontrol.launch_dependents;");
-#endif
-}
-
-template <typename T, typename BiasT, typename IdxT, ScoringFunc SF,
-          int MaxNumExperts, bool UseGroups,
-          int MaxNumTopExperts = DefaultMaxNumTopExperts>
-__global__ void grouped_topk_fused_small_expert_count_kernel(
-    T* scores, float* topkValues, IdxT* topkIndices, BiasT const* routingBias,
-    int64_t const numTokens, int64_t const numGroup, int64_t const topkGroup,
-    int64_t const topk, int64_t const numExperts,
-    int64_t const numExpertsPerGroup, bool const renormalize,
-    double const routedScalingFactor) {
-
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
-  cudaGridDependencySynchronize();
-#endif
-  // declare shared memory structure
-  // number of experts is bounded by number of threads
-  __shared__ float __attribute((aligned(128))) smemScoreSigmoid[MaxNumExperts];
-  __shared__ float __attribute((aligned(128))) smemScoreBias[MaxNumExperts];
-  // number of expert groups is bounded by number of warps
-  int constexpr NumWarps = MaxNumExperts / WARP_SIZE;
-  __shared__ float __attribute((aligned(128))) smemGroupScores[NumWarps];
-   
-  // needed for warp reduce
-  auto block = cg::this_thread_block();
-  auto warp = cg::tiled_partition<WARP_SIZE>(block);
-
-  // for the final reduction of weight norm, only some lanes need to participate
-  int32_t laneIdx = threadIdx.x % WARP_SIZE;
-  int32_t warpIdx = __shfl_sync(0xffffffff, threadIdx.x / WARP_SIZE, 0);
-
-  if constexpr (UseGroups) {
-    if (warpIdx >= numGroup) {
-      return;
-    }
-  }
-  // note that for invalid scores, we simply use a negative value:
-  // they work well even with the compacted format used in topK, and
-  // sigmoid / bias activated scores cannot be negative
-  const float invalidScoreFloat = float{-INFINITY};
-
-  // load bias already; each warp represents one expert group
-  auto threadExpert = threadIdx.x;
-  bool expertSelected = threadExpert < numExperts;
-  if constexpr (UseGroups) {
-    threadExpert = warpIdx * numExpertsPerGroup + laneIdx;
-    expertSelected = laneIdx < numExpertsPerGroup;
-  }
-
-  auto scoreIdx = int64_t{blockIdx.x} * int64_t{numExperts} + threadExpert;
-  auto biasVal = expertSelected ? static_cast<float>(routingBias[threadExpert])
-                                : invalidScoreFloat;
-  topkValues += blockIdx.x * topk;
-  topkIndices += blockIdx.x * topk;
-  
-  // get our assigned thread score; each warp represents one expert group
-  float score =
-      expertSelected ? static_cast<float>(scores[scoreIdx]) : invalidScoreFloat;
-  auto scoreSigmoid = apply_scoring<SF>(score);
-  // write the sigmoid score to shared for later use
-  if (expertSelected) {
-    smemScoreSigmoid[threadExpert] = scoreSigmoid;
-  }
-
-  // get the score with bias
-  // note that with invalid values, because sigmoid is < 1 and bias is -1,
-  // we must get a negative value, which is smaller than any valid value
-  auto scoreBias = float{scoreSigmoid + float{biasVal}};
-
-  if (expertSelected) {
-    smemScoreBias[threadExpert] = scoreBias;
-  }
- 
-  // registers for top group score reduction
-  float topExpGroupScores[NumTopGroupScores];
-  [[maybe_unused]] int32_t topExpGroupIdx[NumTopGroupScores];
-  float topGroups[MaxNumTopGroups];  // bound of numGroup
-  int32_t topGroupIdx[MaxNumTopGroups];
-  float expertScoreGroup[MaxNumTopGroups];
-  int32_t expertIdxGroup[MaxNumTopGroups];
-  float topScores[MaxNumTopExperts];  // bound of topk
-  int32_t topExperts[MaxNumTopExperts];
-
-  if constexpr (UseGroups) {
-    reduce_topk::reduceTopK(warp, topExpGroupScores, topExpGroupIdx, scoreBias,
-                            threadExpert,
-                            /* minValue */ invalidScoreFloat);
-
-    // get the final group score and write it to shared
-    if (warp.thread_rank() == 0) {
-      auto groupScore = topExpGroupScores[0] + topExpGroupScores[1];
-      smemGroupScores[warpIdx] = groupScore;
-    }
-  }
-  // make group scores available to all warps
   __syncthreads();
 
-  if constexpr (UseGroups) {
-    if (warpIdx == 0) {
-      // a single warp performs the selection of top groups, and goes on to
-      // select the final experts
-      float groupScore =
-          laneIdx < numGroup ? smemGroupScores[laneIdx] : invalidScoreFloat;
-
-      reduce_topk::reduceTopK(warp, topGroups, topGroupIdx, groupScore, laneIdx,
-                              /* minValue */ invalidScoreFloat);
-      // final expert selection: get relevant indexes and scores from shared
-#pragma unroll
-      for (int ii = 0; ii < MaxNumTopGroups; ++ii) {  // bound of numGroup
-        auto groupIdx = topGroupIdx[ii];
-        expertIdxGroup[ii] = groupIdx * numExpertsPerGroup + laneIdx;
-
-        expertScoreGroup[ii] = (ii < topkGroup) && expertSelected
-                                   ? smemScoreBias[expertIdxGroup[ii]]
-                                   : invalidScoreFloat;
-      }
-      reduce_topk::reduceTopK(warp, topScores, topExperts, expertScoreGroup,
-                              expertIdxGroup, /* minValue */ invalidScoreFloat,
-                              topk);
-    }
-
-  } else if constexpr (MaxNumExperts > MaxNumExpertsUnit) {
-    // without groups, and the expert number is larger than MaxNumExpertsUnit,
-    // we need to use multiple warps to calculate the intermediate topk results
-
-    int constexpr NumExpertWarps = (MaxNumExperts - 1) / MaxNumExpertsUnit + 1;
-    int constexpr NumInterTopK = NumExpertWarps * MaxNumTopExperts;
-    __shared__ float
-        __attribute((aligned(128))) smemInterTopScores[NumInterTopK];
-    __shared__ int32_t
-        __attribute((aligned(128))) smemInterTopExperts[NumInterTopK];
-    if (warpIdx < NumExpertWarps) {
-      int offset = warpIdx * WARP_SIZE * MaxNumTopGroups;
-#pragma unroll
-      for (int ii = 0; ii < MaxNumTopGroups; ++ii) {
-        auto expertIdx = ii * WARP_SIZE + laneIdx;
-        expertIdxGroup[ii] = offset + expertIdx;
-        expertScoreGroup[ii] = offset + expertIdx < numExperts
-                                   ? smemScoreBias[offset + expertIdx]
-                                   : invalidScoreFloat;
-      }
-      reduce_topk::reduceTopK(warp, topScores, topExperts, expertScoreGroup,
-                              expertIdxGroup,
-                              /* minValue */ invalidScoreFloat, topk);
-
-      if (laneIdx < topk) {
-        smemInterTopScores[warpIdx * MaxNumTopExperts + laneIdx] =
-            topScores[laneIdx];
-        smemInterTopExperts[warpIdx * MaxNumTopExperts + laneIdx] =
-            topExperts[laneIdx];
-      } else if (laneIdx >= topk && laneIdx < MaxNumTopExperts) {
-        smemInterTopScores[warpIdx * MaxNumTopExperts + laneIdx] =
-            invalidScoreFloat;
-        smemInterTopExperts[warpIdx * MaxNumTopExperts + laneIdx] =
-            MaxNumExperts - 1;
-      }
-    }
-    __syncthreads();
-    if (warpIdx == 0) {
-      int constexpr NumInterTopKPerThread = (NumInterTopK - 1) / WARP_SIZE + 1;
-      float intermediateScore[NumInterTopKPerThread];
-      int32_t intermediateExpert[NumInterTopKPerThread];
-      for (int i = laneIdx; i < NumInterTopKPerThread * WARP_SIZE;
-           i += WARP_SIZE) {
-        int ii = i / WARP_SIZE;
-        if (i < NumInterTopK) {
-          intermediateScore[ii] = smemInterTopScores[i];
-          intermediateExpert[ii] = smemInterTopExperts[i];
+  if (case_id < num_tokens) {
+    if (if_proceed_next_topk) {
+      for (int i = lane_id; i < topk; i += WARP_SIZE) {
+        float value;
+        if (renormalize) {
+          value = cuda_cast<float, T>(s_topk_value[i]) / topk_sum *
+                  routed_scaling_factor;
         } else {
-          intermediateScore[ii] = invalidScoreFloat;
-          intermediateExpert[ii] = MaxNumExperts - 1;
+          value = cuda_cast<float, T>(s_topk_value[i]) * routed_scaling_factor;
         }
+        topk_indices[i] = s_topk_idx[i];
+        topk_values[i] = value;
       }
-      reduce_topk::reduceTopK(warp, topScores, topExperts, intermediateScore,
-                              intermediateExpert,
-                              /* minValue */ invalidScoreFloat, topk);
-    }
-  } else {
-    // without groups, and the expert number is smaller than MaxNumExpertsUnit
-    // each thread just takes `MaxNumTopGroups` experts
-    if (warpIdx == 0) {
-#pragma unroll
-      for (int ii = 0; ii < MaxNumTopGroups; ++ii) {
-        auto expertIdx = ii * WARP_SIZE + laneIdx;
-        expertIdxGroup[ii] = expertIdx;
-        expertScoreGroup[ii] = expertIdx < numExperts ? smemScoreBias[expertIdx]
-                                                      : invalidScoreFloat;
+    } else {
+      for (int i = lane_id; i < topk; i += WARP_SIZE) {
+        topk_indices[i] = i;
+        topk_values[i] = 1.0f / topk;
       }
-      reduce_topk::reduceTopK(warp, topScores, topExperts, expertScoreGroup,
-                              expertIdxGroup,
-                              /* minValue */ invalidScoreFloat, topk);
     }
+    // Note: when if_proceed_next_topk==false, choose the first 8 experts as the
+    // default result.
   }
-
-  if (warpIdx == 0) {
-    // determine our lane's expert index and write to output
-    int32_t expertIdx =
-        laneIdx < topk ? topExperts[laneIdx] : MaxNumExperts - 1;
-    float scoreNorm = laneIdx < topk ? smemScoreSigmoid[expertIdx] : 0.F;
-    float finalScore = static_cast<float>(scoreNorm * routedScalingFactor);
-    // norm the value
-    if (renormalize) {
-      auto redNorm = cg::reduce(warp, scoreNorm, cg::plus<float>{});
-      finalScore /= (redNorm + 1e-20);
-    }
-    // store the topk scores and experts to output
-    if (laneIdx < topk) {
-      topkValues[laneIdx] = finalScore;
-      topkIndices[laneIdx] = expertIdx;
-    }
-  }
-
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
-  cudaTriggerProgrammaticLaunchCompletion();
-#endif
+// #if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+//   asm volatile("griddepcontrol.launch_dependents;");
+// #endif
 }
 
-template <typename T, typename BiasT, typename IdxT, ScoringFunc SF>
-void invokeNoAuxTc(T* scores, float* topk_values, IdxT* topk_indices,
-                   BiasT const* bias, int64_t const num_tokens,
+template <typename T, typename IdxT>
+void invokeNoAuxTc(T* scores, T* group_scores, float* topk_values,
+                   IdxT* topk_indices, T const* bias, int64_t const num_tokens,
                    int64_t const num_experts, int64_t const n_group,
                    int64_t const topk_group, int64_t const topk,
                    bool const renormalize, double const routed_scaling_factor,
-                   bool enable_pdl = false, cudaStream_t const stream = 0) {
-  cudaLaunchConfig_t config;
-  config.stream = stream;
-  cudaLaunchAttribute attrs[1];
-  attrs[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;
-  attrs[0].val.programmaticStreamSerializationAllowed = enable_pdl;
-  config.numAttrs = 1;
-  config.attrs = attrs;
+                   int const scoring_func, bool enable_pdl = false,
+                   cudaStream_t const stream = 0) {
+  int64_t num_cases = num_tokens * n_group;
+  int64_t topk_with_k2_num_blocks = (num_cases - 1) / NUM_WARPS_PER_BLOCK + 1;
+//   auto* kernel_instance1 = &topk_with_k2_kernel<T>;
+//   cudaLaunchConfig_t config;
+//   config.gridDim = topk_with_k2_num_blocks;
+//   config.blockDim = BLOCK_SIZE;
+//   config.dynamicSmemBytes = 0;
+//   config.stream = stream;
+//   cudaLaunchAttribute attrs[1];
+//   attrs[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;
+//   attrs[0].val.programmaticStreamSerializationAllowed = enable_pdl;
+//   config.numAttrs = 1;
+//   config.attrs = attrs;
+//   cudaLaunchKernelEx(&config, kernel_instance1, group_scores, scores, bias,
+//                      num_tokens, num_cases, n_group, num_experts / n_group,
+//                      scoring_func);
+  topk_with_k2_kernel<T><<<topk_with_k2_num_blocks, BLOCK_SIZE, 0, stream>>>(group_scores, scores, bias,
+                     num_tokens, num_cases, n_group, num_experts / n_group,
+                     scoring_func);
 
-  // Check if we can use the optimized
-  // grouped_topk_fused_small_expert_count_kernel
-  bool const is_single_group =
-      (n_group == 1) && (topk_group == 1) &&
-      (num_experts <= MaxSupportedExpertCount) &&
-      (topk <= DefaultMaxNumTopExperts || topk == MaxSupportedTopExperts);
-
-  int64_t const experts_per_group = num_experts / n_group;
-  bool const is_multi_group =
-      (n_group > 1) && (num_experts <= NumDeepseekExperts) &&
-      (experts_per_group <= WARP_SIZE) &&
-      (experts_per_group * topk_group <= MaxNumExpertsUnit) &&
-      (topk <= DefaultMaxNumTopExperts) && (topk_group <= MaxNumTopGroups);
-  if (is_single_group || is_multi_group) {
-
-    auto* kernel_instance =
-        &grouped_topk_fused_small_expert_count_kernel<T, BiasT, IdxT, SF,
-                                                      NumDeepseekExperts, true>;
-    int num_threads = NumDeepseekExperts;
-    if (is_single_group) {
-      // Special case for Nemotron, which selects top 22 from 512 experts, and 1
-      // group only.
-      if (num_experts == NumNemotronExperts && n_group == 1 &&
-          topk == MaxSupportedTopExperts) {
-        kernel_instance = &grouped_topk_fused_small_expert_count_kernel<
-            T, BiasT, IdxT, SF, NumNemotronExperts, false,
-            MaxSupportedTopExperts>;
-        num_threads = NumNemotronExperts;
-      } else if (num_experts > NumKimiK2Experts &&
-                 num_experts <= MaxSupportedExpertCount) {
-        kernel_instance = &grouped_topk_fused_small_expert_count_kernel<
-            T, BiasT, IdxT, SF, MaxSupportedExpertCount, false>;
-        num_threads = MaxSupportedExpertCount;
-      } else if (num_experts > MaxNumExpertsUnit &&
-                 num_experts <= NumKimiK2Experts) {
-        kernel_instance = &grouped_topk_fused_small_expert_count_kernel<
-            T, BiasT, IdxT, SF, NumKimiK2Experts, false>;
-        num_threads = NumKimiK2Experts;
-      } else {
-        kernel_instance = &grouped_topk_fused_small_expert_count_kernel<
-            T, BiasT, IdxT, SF, MaxNumExpertsUnit, false>;
-        num_threads = MaxNumExpertsUnit;
-      }
-    }
-    config.gridDim = num_tokens;
-    config.blockDim = num_threads;
-    config.dynamicSmemBytes = 0;
-
-
-    // MACA 平台直接降级为标准启动语法，绕开不支持的属性
-    kernel_instance<<<config.gridDim, config.blockDim, config.dynamicSmemBytes, config.stream>>>(
-                       scores, topk_values, topk_indices, bias, num_tokens, n_group, topk_group,
-                       topk, num_experts, num_experts / n_group, renormalize,
-                       routed_scaling_factor);
-
-  } else {
-    auto* kernel_instance = &grouped_topk_fused_kernel<T, BiasT, IdxT, SF>;
-    // One block per token; one warp per group.
-    config.gridDim = static_cast<uint32_t>(num_tokens);
-    config.blockDim = static_cast<uint32_t>(n_group) * WARP_SIZE;
-    // Dynamic shared memory: WarpSelect staging + per-group topk buffers.
-    int32_t const num_warps = static_cast<int32_t>(n_group);
-    size_t const val_bytes =
-        static_cast<size_t>(num_warps) * WARP_SIZE * sizeof(T);
-    size_t const val_bytes_aligned =
-        warp_topk::round_up_to_multiple_of<256>(val_bytes);
-    size_t const idx_bytes =
-        static_cast<size_t>(num_warps) * WARP_SIZE * sizeof(int32_t);
-
-    size_t const internal_bytes = val_bytes_aligned + idx_bytes;
-    size_t const extra_bytes = 16 + static_cast<size_t>(n_group) * sizeof(T);
-    config.dynamicSmemBytes = internal_bytes + extra_bytes;
-
-    // MACA 平台直接降级为标准启动语法，绕开不支持的属性
-    kernel_instance<<<config.gridDim, config.blockDim, config.dynamicSmemBytes, config.stream>>>(
-                       scores, topk_values, topk_indices, bias, num_tokens, num_experts, n_group,
-                       topk_group, topk, renormalize, routed_scaling_factor);
-  }
+  int64_t topk_with_k_group_num_blocks =
+      (num_tokens - 1) / NUM_WARPS_PER_BLOCK + 1;
+  size_t dynamic_smem_in_bytes =
+      warp_topk::calc_smem_size_for_block_wide<T, int32_t>(NUM_WARPS_PER_BLOCK,
+                                                           topk);
+//   auto* kernel_instance2 = &group_idx_and_topk_idx_kernel<T, IdxT>;
+//   config.gridDim = topk_with_k_group_num_blocks;
+//   config.blockDim = BLOCK_SIZE;
+//   config.dynamicSmemBytes = dynamic_smem_in_bytes;
+//   config.stream = stream;
+//   attrs[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;
+//   attrs[0].val.programmaticStreamSerializationAllowed = enable_pdl;
+//   config.numAttrs = 1;
+//   config.attrs = attrs;
+//   cudaLaunchKernelEx(&config, kernel_instance2, scores, group_scores,
+//                      topk_values, topk_indices, bias, num_tokens, n_group,
+//                      topk_group, topk, num_experts, num_experts / n_group,
+//                      renormalize, routed_scaling_factor, scoring_func);
+    group_idx_and_topk_idx_kernel<T, IdxT><<<topk_with_k_group_num_blocks, BLOCK_SIZE, dynamic_smem_in_bytes, stream>>>(scores, group_scores,
+                     topk_values, topk_indices, bias, num_tokens, n_group,
+                     topk_group, topk, num_experts, num_experts / n_group,
+                     renormalize, routed_scaling_factor, scoring_func);
 }
 
-#define INSTANTIATE_NOAUX_TC(T, BiasT, IdxT, SF)                             \
-  template void invokeNoAuxTc<T, BiasT, IdxT, SF>(                           \
-      T * scores, float* topk_values, IdxT* topk_indices, BiasT const* bias, \
-      int64_t const num_tokens, int64_t const num_experts,                   \
-      int64_t const n_group, int64_t const topk_group, int64_t const topk,   \
-      bool const renormalize, double const routed_scaling_factor,            \
-      bool enable_pdl, cudaStream_t const stream);
+#define INSTANTIATE_NOAUX_TC(T, IdxT)                                       \
+  template void invokeNoAuxTc<T, IdxT>(                                     \
+      T * scores, T * group_scores, float* topk_values, IdxT* topk_indices, \
+      T const* bias, int64_t const num_tokens, int64_t const num_experts,   \
+      int64_t const n_group, int64_t const topk_group, int64_t const topk,  \
+      bool const renormalize, double const routed_scaling_factor,           \
+      int const scoring_func, bool enable_pdl, cudaStream_t const stream);
 
-INSTANTIATE_NOAUX_TC(float, float, int32_t, SCORING_SIGMOID);
-INSTANTIATE_NOAUX_TC(float, half, int32_t, SCORING_SIGMOID);
-INSTANTIATE_NOAUX_TC(float, __nv_bfloat16, int32_t, SCORING_SIGMOID);
-INSTANTIATE_NOAUX_TC(half, float, int32_t, SCORING_SIGMOID);
-INSTANTIATE_NOAUX_TC(half, half, int32_t, SCORING_SIGMOID);
-INSTANTIATE_NOAUX_TC(half, __nv_bfloat16, int32_t, SCORING_SIGMOID);
-INSTANTIATE_NOAUX_TC(__nv_bfloat16, float, int32_t, SCORING_SIGMOID);
-INSTANTIATE_NOAUX_TC(__nv_bfloat16, half, int32_t, SCORING_SIGMOID);
-INSTANTIATE_NOAUX_TC(__nv_bfloat16, __nv_bfloat16, int32_t, SCORING_SIGMOID);
-INSTANTIATE_NOAUX_TC(float, float, int32_t, SCORING_NONE);
-INSTANTIATE_NOAUX_TC(float, half, int32_t, SCORING_NONE);
-INSTANTIATE_NOAUX_TC(float, __nv_bfloat16, int32_t, SCORING_NONE);
-INSTANTIATE_NOAUX_TC(half, float, int32_t, SCORING_NONE);
-INSTANTIATE_NOAUX_TC(half, half, int32_t, SCORING_NONE);
-INSTANTIATE_NOAUX_TC(half, __nv_bfloat16, int32_t, SCORING_NONE);
-INSTANTIATE_NOAUX_TC(__nv_bfloat16, float, int32_t, SCORING_NONE);
-INSTANTIATE_NOAUX_TC(__nv_bfloat16, half, int32_t, SCORING_NONE);
-INSTANTIATE_NOAUX_TC(__nv_bfloat16, __nv_bfloat16, int32_t, SCORING_NONE);
+INSTANTIATE_NOAUX_TC(float, int32_t);
+INSTANTIATE_NOAUX_TC(half, int32_t);
+INSTANTIATE_NOAUX_TC(maca_bfloat16, int32_t);
 }  // end namespace moe
 }  // namespace vllm
 
@@ -1076,26 +825,21 @@ std::tuple<torch::Tensor, torch::Tensor> grouped_topk(
     int64_t topk, bool renormalize, double routed_scaling_factor,
     torch::Tensor const& bias, int64_t scoring_func = 0) {
   auto data_type = scores.scalar_type();
-  auto bias_type = bias.scalar_type();
   auto input_size = scores.sizes();
   int64_t num_tokens = input_size[0];
   int64_t num_experts = input_size[1];
   TORCH_CHECK(input_size.size() == 2, "scores must be a 2D Tensor");
-  TORCH_CHECK(n_group > 0, "n_group must be positive");
-  TORCH_CHECK(topk > 0, "topk must be positive");
-  TORCH_CHECK(topk_group > 0, "topk_group must be positive");
-  TORCH_CHECK(topk_group <= n_group, "topk_group must be <= n_group");
   TORCH_CHECK(num_experts % n_group == 0,
               "num_experts should be divisible by n_group");
   TORCH_CHECK(n_group <= 32,
               "n_group should be smaller than or equal to 32 for now");
   TORCH_CHECK(topk <= 32, "topk should be smaller than or equal to 32 for now");
-  TORCH_CHECK(topk <= topk_group * (num_experts / n_group),
-              "topk must be <= topk_group * (num_experts / n_group)");
   TORCH_CHECK(scoring_func == vllm::moe::SCORING_NONE ||
                   scoring_func == vllm::moe::SCORING_SIGMOID,
               "scoring_func must be SCORING_NONE (0) or SCORING_SIGMOID (1)");
 
+  torch::Tensor group_scores = torch::empty(
+      {num_tokens, n_group}, torch::dtype(data_type).device(torch::kCUDA));
   // Always output float32 for topk_values (eliminates Python-side conversion)
   torch::Tensor topk_values = torch::empty(
       {num_tokens, topk}, torch::dtype(torch::kFloat32).device(torch::kCUDA));
@@ -1103,67 +847,40 @@ std::tuple<torch::Tensor, torch::Tensor> grouped_topk(
       {num_tokens, topk}, torch::dtype(torch::kInt32).device(torch::kCUDA));
 
   auto stream = c10::cuda::getCurrentCUDAStream(scores.get_device());
-  auto const sf = static_cast<vllm::moe::ScoringFunc>(scoring_func);
-
-#define LAUNCH_KERNEL_SF(T, BiasT, IdxT)                                      \
-  do {                                                                        \
-    switch (sf) {                                                             \
-      case vllm::moe::SCORING_NONE:                                           \
-        vllm::moe::invokeNoAuxTc<T, BiasT, IdxT, vllm::moe::SCORING_NONE>(    \
-            reinterpret_cast<T*>(scores.mutable_data_ptr()),                  \
-            reinterpret_cast<float*>(topk_values.mutable_data_ptr()),         \
-            reinterpret_cast<IdxT*>(topk_indices.mutable_data_ptr()),         \
-            reinterpret_cast<BiasT const*>(bias.data_ptr()), num_tokens,      \
-            num_experts, n_group, topk_group, topk, renormalize,              \
-            routed_scaling_factor, false, stream);                            \
-        break;                                                                \
-      case vllm::moe::SCORING_SIGMOID:                                        \
-        vllm::moe::invokeNoAuxTc<T, BiasT, IdxT, vllm::moe::SCORING_SIGMOID>( \
-            reinterpret_cast<T*>(scores.mutable_data_ptr()),                  \
-            reinterpret_cast<float*>(topk_values.mutable_data_ptr()),         \
-            reinterpret_cast<IdxT*>(topk_indices.mutable_data_ptr()),         \
-            reinterpret_cast<BiasT const*>(bias.data_ptr()), num_tokens,      \
-            num_experts, n_group, topk_group, topk, renormalize,              \
-            routed_scaling_factor, false, stream);                            \
-        break;                                                                \
-      default:                                                                \
-        throw std::invalid_argument("Unsupported scoring_func");              \
-        break;                                                                \
-    }                                                                         \
-  } while (0)
-
-#define LAUNCH_KERNEL(T, IdxT)                                         \
-  do {                                                                 \
-    switch (bias_type) {                                               \
-      case torch::kFloat16:                                            \
-        LAUNCH_KERNEL_SF(T, half, IdxT);                               \
-        break;                                                         \
-      case torch::kFloat32:                                            \
-        LAUNCH_KERNEL_SF(T, float, IdxT);                              \
-        break;                                                         \
-      case torch::kBFloat16:                                           \
-        LAUNCH_KERNEL_SF(T, __nv_bfloat16, IdxT);                      \
-        break;                                                         \
-      default:                                                         \
-        throw std::invalid_argument(                                   \
-            "Invalid bias dtype, only supports float16, float32, and " \
-            "bfloat16");                                               \
-        break;                                                         \
-    }                                                                  \
-  } while (0)
 
   switch (data_type) {
     case torch::kFloat16:
       // Handle Float16
-      LAUNCH_KERNEL(half, int32_t);
+      vllm::moe::invokeNoAuxTc<half, int32_t>(
+          reinterpret_cast<half*>(scores.mutable_data_ptr()),
+          reinterpret_cast<half*>(group_scores.mutable_data_ptr()),
+          reinterpret_cast<float*>(topk_values.mutable_data_ptr()),
+          reinterpret_cast<int32_t*>(topk_indices.mutable_data_ptr()),
+          reinterpret_cast<half const*>(bias.data_ptr()), num_tokens,
+          num_experts, n_group, topk_group, topk, renormalize,
+          routed_scaling_factor, static_cast<int>(scoring_func), false, stream);
       break;
     case torch::kFloat32:
       // Handle Float32
-      LAUNCH_KERNEL(float, int32_t);
+      vllm::moe::invokeNoAuxTc<float, int32_t>(
+          reinterpret_cast<float*>(scores.mutable_data_ptr()),
+          reinterpret_cast<float*>(group_scores.mutable_data_ptr()),
+          reinterpret_cast<float*>(topk_values.mutable_data_ptr()),
+          reinterpret_cast<int32_t*>(topk_indices.mutable_data_ptr()),
+          reinterpret_cast<float const*>(bias.data_ptr()), num_tokens,
+          num_experts, n_group, topk_group, topk, renormalize,
+          routed_scaling_factor, static_cast<int>(scoring_func), false, stream);
       break;
     case torch::kBFloat16:
       // Handle BFloat16
-      LAUNCH_KERNEL(__nv_bfloat16, int32_t);
+      vllm::moe::invokeNoAuxTc<maca_bfloat16, int32_t>(
+          reinterpret_cast<maca_bfloat16*>(scores.mutable_data_ptr()),
+          reinterpret_cast<maca_bfloat16*>(group_scores.mutable_data_ptr()),
+          reinterpret_cast<float*>(topk_values.mutable_data_ptr()),
+          reinterpret_cast<int32_t*>(topk_indices.mutable_data_ptr()),
+          reinterpret_cast<maca_bfloat16 const*>(bias.data_ptr()), num_tokens,
+          num_experts, n_group, topk_group, topk, renormalize,
+          routed_scaling_factor, static_cast<int>(scoring_func), false, stream);
       break;
     default:
       // Handle other data types
@@ -1171,7 +888,5 @@ std::tuple<torch::Tensor, torch::Tensor> grouped_topk(
           "Invalid dtype, only supports float16, float32, and bfloat16");
       break;
   }
-#undef LAUNCH_KERNEL
-#undef LAUNCH_KERNEL_SF
   return {topk_values, topk_indices};
 }

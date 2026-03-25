@@ -31,7 +31,7 @@ features:
 Check out [this talk](https://www.youtube.com/watch?v=CtrqBmYtSEk) for an overview
 of the challenges inherent to CUDA kernel benchmarking and how NVBench solves them for you!
 
-## C/C++ API Benchmark Compiler
+## compiler
 ```shell
 #setting env
 cd /code/path/dir/mcoplib/mxbench
@@ -41,7 +41,7 @@ mkdir build
 #cmd 
 cmake_maca -DCMAKE_CXX_STANDARD=17 -DCMAKE_CUDA_STANDARD=17 -DCMAKE_CUDA_ARCHITECTURES=80   -DCMAKE_CUDA_FLAGS="-Xcompiler=-std=gnu++17 " -DCMAKE_CXX_FLAGS="-Wno-unused-parameter  -Wno-error  -Wno-implicit-float-conversion "  .. &&make_maca VERBOSE=1
 ```
-## C/C++ Op Kernel API bench test
+## run
 ```shell
 cd  /code/dir/build
 ./softmax_benchmark  --throttle-threshold 0
@@ -49,134 +49,6 @@ cd  /code/dir/build
 ```
 note: 运行时的时候 请设置参数：--throttle-threshold 0， 不然会导致 GPU运行频率远低于预期，触发了MXBench的节流检测机制
 
-## Python Op Kernel API bench test
-
-### 构建mxbench whl包及安装
-```shell
-#编译
-cd /code/to/mcoplib/python
-#设置编译变量
-source env.sh
-#设置mxbench 安装目录环境变量
-export NVBENCH_INSTALL_PATH='/code/to/path/mxbench/install'
-#两种方式安装mxbench
-#1. 开发者模式安装 执行：
-python setup.py develop
-#2. whl 打包
-python setup.py bdist_wheel
-#安装whl 包
-pip3 install ./dist/*.whl
-```
-### using mxbench whl pkg , benchmark Op kernel python/torch API
-```shell
-python benchmark/fused_add_rms_norm_simple.py
-#example
-root@k8s-master:/home/metax/yiyu/nvbench/mcoplib/benchmark# python fused_add_rms_norm_simple.py
-INFO Print the version information of mcoplib during compilation.
-
-WARNING Version file not found at: /home/metax/yiyu/nvbench/mcoplib/mcoplib/version
-
-Version info:unknown
-
-INFO Staring Check the current MACA version of the operating environment.
-
-WARNING get_build_maca_version Version file not found at: /home/metax/yiyu/nvbench/mcoplib/mcoplib/version
-
-WARNING Get maca version or get mcoplib build maca version Fail.
-
-# Devices
-
-## [0] `MetaX C280`
-* SM Version: 800 (PTX Version: 100)
-* Number of SMs: 56
-* SM Default Clock Rate: 1600 MHz
-* Global Memory: 64042 MiB Free / 65376 MiB Total
-* Global Memory Bus Peak: 1843 GB/sec (4096-bit DDR @1800MHz)
-* Max Shared Memory: 64 KiB/SM, 64 KiB/Block
-* L2 Cache Size: 8192 KiB
-* Maximum Active Blocks: 16/SM
-* Maximum Active Threads: 2048/SM, 1024/Block
-* Available Registers: 131072/SM, 131072/Block
-* ECC Enabled: Yes
-
-## [1] `MetaX C280`
-* SM Version: 800 (PTX Version: 100)
-* Number of SMs: 56
-* SM Default Clock Rate: 1600 MHz
-* Global Memory: 64043 MiB Free / 65376 MiB Total
-* Global Memory Bus Peak: 1843 GB/sec (4096-bit DDR @1800MHz)
-* Max Shared Memory: 64 KiB/SM, 64 KiB/Block
-* L2 Cache Size: 8192 KiB
-* Maximum Active Blocks: 16/SM
-* Maximum Active Threads: 2048/SM, 1024/Block
-* Available Registers: 131072/SM, 131072/Block
-* ECC Enabled: Yes
-
-## [2] `MetaX C280`
-* SM Version: 800 (PTX Version: 100)
-* Number of SMs: 56
-* SM Default Clock Rate: 1600 MHz
-* Global Memory: 64043 MiB Free / 65376 MiB Total
-* Global Memory Bus Peak: 1843 GB/sec (4096-bit DDR @1800MHz)
-* Max Shared Memory: 64 KiB/SM, 64 KiB/Block
-* L2 Cache Size: 8192 KiB
-* Maximum Active Blocks: 16/SM
-* Maximum Active Threads: 2048/SM, 1024/Block
-* Available Registers: 131072/SM, 131072/Block
-* ECC Enabled: Yes
-
-## [3] `MetaX C280`
-* SM Version: 800 (PTX Version: 100)
-* Number of SMs: 56
-* SM Default Clock Rate: 1600 MHz
-* Global Memory: 64011 MiB Free / 65344 MiB Total
-* Global Memory Bus Peak: 1843 GB/sec (4096-bit DDR @1800MHz)
-* Max Shared Memory: 64 KiB/SM, 64 KiB/Block
-* L2 Cache Size: 8192 KiB
-* Maximum Active Blocks: 16/SM
-* Maximum Active Threads: 2048/SM, 1024/Block
-* Available Registers: 131072/SM, 131072/Block
-* ECC Enabled: Yes
-
-# Log
-
-```
-Run:  [1/4] simple_fused_add_rms_norm_benchmark [Device=0]
-Pass: Cold: 0.062880ms GPU, 0.074982ms CPU, 0.50s total GPU, 1.13s total wall, 7952x
-Run:  [2/4] simple_fused_add_rms_norm_benchmark [Device=1]
-Pass: Cold: 0.055262ms GPU, 0.066373ms CPU, 0.50s total GPU, 1.17s total wall, 9056x
-Run:  [3/4] simple_fused_add_rms_norm_benchmark [Device=2]
-Pass: Cold: 0.041581ms GPU, 0.049783ms CPU, 0.50s total GPU, 1.11s total wall, 12032x
-Run:  [4/4] simple_fused_add_rms_norm_benchmark [Device=3]
-Pass: Cold: 0.041773ms GPU, 0.049592ms CPU, 0.50s total GPU, 1.10s total wall, 11984x
-```
-
-# Benchmark Results
-
-## simple_fused_add_rms_norm_benchmark
-
-### [0] MetaX C280
-
-| NumTokens | HiddenSize |  DType  | Samples | CPU Time  |  Noise  | GPU Time  |  Noise  | Elem/s | GlobalMem BW | BWUtil |
-|-----------|------------|---------|---------|-----------|---------|-----------|---------|--------|--------------|--------|
-|      1024 |        512 | float16 |   7952x | 74.982 us | 114.05% | 62.880 us | 135.65% | 8.338G |  66.720 GB/s |  3.62% |
-### [1] MetaX C280
-
-| NumTokens | HiddenSize |  DType  | Samples | CPU Time  | Noise  | GPU Time  | Noise  | Elem/s | GlobalMem BW | BWUtil |
-|-----------|------------|---------|---------|-----------|--------|-----------|--------|--------|--------------|--------|
-|      1024 |        512 | float16 |   9056x | 66.373 us | 28.54% | 55.262 us | 30.05% | 9.487G |  75.917 GB/s |  4.12% |
-### [2] MetaX C280
-
-| NumTokens | HiddenSize |  DType  | Samples | CPU Time  | Noise  | GPU Time  | Noise | Elem/s  | GlobalMem BW | BWUtil |
-|-----------|------------|---------|---------|-----------|--------|-----------|-------|---------|--------------|--------|
-|      1024 |        512 | float16 |  12032x | 49.783 us | 15.33% | 41.581 us | 7.56% | 12.609G | 100.894 GB/s |  5.47% |
-### [3] MetaX C280
-
-| NumTokens | HiddenSize |  DType  | Samples | CPU Time  | Noise | GPU Time  | Noise | Elem/s  | GlobalMem BW | BWUtil |
-|-----------|------------|---------|---------|-----------|-------|-----------|-------|---------|--------------|--------|
-|      1024 |        512 | float16 |  11984x | 49.592 us | 8.55% | 41.773 us | 9.07% | 12.551G | 100.431 GB/s |  5.45% |
-
-```
 # Supported Compilers and Tools
 
 - CMake > 3.30.4
@@ -290,6 +162,8 @@ of investment.
 
 Contributions are welcome!
 
+For current issues, see the [issue board](https://github.com/NVIDIA/nvbench/issues). Issues labeled with [![](https://img.shields.io/github/labels/NVIDIA/nvbench/good%20first%20issue)](https://github.com/NVIDIA/nvbench/labels/good%20first%20issue) are good for first time contributors.
+
 ## Tests
 
 To build `nvbench` tests:
@@ -318,7 +192,9 @@ See [LICENSE](./LICENSE).
 
 NVBench will measure the CPU and CUDA GPU execution time of a ***single
 host-side critical region*** per benchmark. It is intended for regression
-testing and parameter tuning of individual kernels.
+testing and parameter tuning of individual kernels. For in-depth analysis of
+end-to-end performance of multiple applications, the NVIDIA Nsight tools are
+more appropriate.
 
 NVBench is focused on evaluating the performance of CUDA kernels. It also provides
 CPU-only benchmarking facilities intended for non-trivial CPU workloads, but is

@@ -1,4 +1,3 @@
-// 2025 - Modified by MetaX Integrated Circuits (Shanghai) Co., Ltd. All Rights Reserved.
 // clang-format off
 // adapted from https://github.com/Dao-AILab/causal-conv1d/blob/main/csrc/causal_conv1d_fwd.cu
 // and https://github.com/Dao-AILab/causal-conv1d/blob/main/csrc/causal_conv1d_update.cu
@@ -516,7 +515,7 @@ void causal_conv1d_fwd_launch(ConvParamsBase &params, cudaStream_t stream) {
             // There is a slight signature discrepancy in HIP and CUDA "FuncSetAttribute" function.
             C10_CUDA_CHECK(cudaFuncSetAttribute(
                 (void *) kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize));
-            std::cerr << "Warning (causal_conv1d fwd launch): attempting to set maxDynamicSharedMemorySize on an GPU which is currently a non-op (in ROCm versions <= 6.1). This might lead to undefined behavior. \n" << std::endl;
+            std::cerr << "Warning (causal_conv1d fwd launch): attempting to set maxDynamicSharedMemorySize on an AMD GPU which is currently a non-op (in ROCm versions <= 6.1). This might lead to undefined behavior. \n" << std::endl;
             #endif
         }
         kernel<<<grid, Ktraits::kNThreads, kSmemSize, stream>>>(params);
