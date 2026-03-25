@@ -65,8 +65,6 @@ build/
 mxbench/install/
 mxbench/python/build/
 mxbench/python/dist/
-mxbench/python/build/_deps/fmt-src
-mxbench/python/pynvbench.egg-info
 dist/
 compile_commands.json
 *.whl

@@ -1,4 +1,3 @@
-// 2025 - Modified by MetaX Integrated Circuits (Shanghai) Co., Ltd. All Rights Reserved.
 #include "rms_norm.cuh"
 #include "rotary_emb.cuh"
 #include "bmm.cuh"
@@ -195,7 +194,7 @@ __global__ void gemm_test(const scalar_t* q, const scalar_t* w_kc, scalar_t* q_i
         >(Q_LEN, q, w_kc, wave_idx, wave_group_idx, wave_group_lane, 0, 0,0, q_input);
 }
 
- 
+
 template<typename scalar_t, int NUM_LOCAL_HEADS=128, int KV_LORA_RANK=512, int QK_NOPE_HEAD_DIM=128, int QK_ROPE_HEAD_DIM=64>
 __global__ void fused_mla_RMS_rotary_emb(
     const int Q_LEN,
@@ -314,4 +313,5 @@ __global__ void fused_mla_normal_kv_element_wise(
         *((float4*)v + v_offset) = val;
     }
 }
+
 }

@@ -14,8 +14,6 @@
 #endif
 
 #include "../include/int8_quant_kernel.h"
-typedef __NATIVE_VECTOR__(4, float) v4f32;
-typedef __NATIVE_VECTOR__(4, _Float16) v4f16;
 
 static __forceinline__ __device__ int8_t float_to_int8_rn(float x) {
 #ifdef USE_ROCM
@@ -116,12 +114,9 @@ __global__ void static_scaled_int8_quant_kernel(
   int64_t const token_idx = blockIdx.x;
   scale_type const scale = *scale_ptr;
 
-  // Must be performed using 64-bit math to avoid integer overflow.
-  out += token_idx * hidden_size;
-  input += token_idx * hidden_size;
-
   for (int i = tid; i < hidden_size; i += blockDim.x) {
-    out[i] = float_to_int8_rn(static_cast<float>(input[i]) / scale);
+    out[token_idx * hidden_size + i] = float_to_int8_rn(
+        static_cast<float>(input[token_idx * hidden_size + i]) / scale);
   }
 }
 
@@ -135,14 +130,10 @@ __global__ void static_scaled_int8_azp_quant_kernel(
   scale_type const scale = *scale_ptr;
   azp_type const azp = *azp_ptr;
 
-  // Must be performed using 64-bit math to avoid integer overflow.
-  out += token_idx * hidden_size;
-  input += token_idx * hidden_size;
-
   for (int i = tid; i < hidden_size; i += blockDim.x) {
-    auto const val = static_cast<float>(input[i]);
+    auto const val = static_cast<float>(input[token_idx * hidden_size + i]);
     auto const quant_val = int32_to_int8(float_to_int32_rn(val / scale) + azp);
-    out[i] = quant_val;
+    out[token_idx * hidden_size + i] = quant_val;
   }
 }
 
@@ -636,10 +627,10 @@ __global__ void dynamic_scaled_int8_quant_mask_kernel_sreg_opt(
         }
       }
 
-      using BlockReduce = cub::BlockReduce<float, 512>;
+      using BlockReduce = cub::BlockReduce<scalar_t, 512>;
       __shared__ typename BlockReduce::TempStorage reduceStorage;
       float const block_absmax_val_maybe =
-        BlockReduce(reduceStorage).Reduce(absmax_val, cub::Max{}, blockDim_x);
+          BlockReduce(reduceStorage).Reduce(absmax_val, cub::Max{}, blockDim_x);
       __shared__ scale_type block_absmax_val;
       if (tid == 0) {
         block_absmax_val = static_cast<scale_type>(block_absmax_val_maybe);
@@ -709,13 +700,13 @@ __global__ void dynamic_scaled_int8_quant_mask_kernel_reg_opt(
       }
     }
 
-    using BlockReduce = cub::BlockReduce<scale_type, 512>;
+    using BlockReduce = cub::BlockReduce<scalar_t, 512>;
     __shared__ typename BlockReduce::TempStorage reduceStorage;
-    scale_type const block_absmax_val_maybe =
+    scalar_t const block_absmax_val_maybe =
         BlockReduce(reduceStorage).Reduce(absmax_val, cub::Max{}, blockDim_x);
     __shared__ scale_type block_absmax_val;
     if (tid == 0) {
-      block_absmax_val = block_absmax_val_maybe;
+      block_absmax_val = static_cast<scale_type>(block_absmax_val_maybe);
       scale[token_idx] = block_absmax_val * 0.0078740157;
     }
     __syncthreads();
@@ -884,7 +875,7 @@ __launch_bounds__(1024) __global__ void dynamic_scaled_int8_quant_mask_kernel_op
   }
 }
 
-template<typename T, typename T1, typename VT, typename VT1, int NUM_VT, int type> 
+template<typename T, typename T1, typename VT, typename VT1, int NUM_VT> 
 __global__ void silu_and_mul_mask_quant_pack(T* input, T* output,T1* mask, int mask_size, int64_t grid_size, int64_t num_tokens, int64_t hidden_size, int64_t out_stirde, int blockDim_x)
 {
     constexpr int N = sizeof(VT) / sizeof(T);
@@ -942,48 +933,25 @@ __global__ void silu_and_mul_mask_quant_pack(T* input, T* output,T1* mask, int m
         __shared__ float block_absmax_val;
         int8_t* ptr_output = (int8_t*)(output + token_idx * out_stirde);
         float* ptr_scale = (float*)(ptr_output + hidden_size);
-        if constexpr(type == 0) {
-            if (tid == 0) {
-              block_absmax_val = block_absmax_val_maybe;
-              ptr_scale[0] = block_absmax_val * 0.002232142857;
+        if (tid == 0) {
+            block_absmax_val = block_absmax_val_maybe;
+            ptr_scale[0] = block_absmax_val * 0.0078740157;
+        }
+        __syncthreads();
+        float const tmp_scale = 127.0f * __builtin_mxc_rcpf(block_absmax_val);
+        for (int i = tid*N, k = 0; i < hidden_size; i += stride, k++) {
+            VT1 vdst;
+            int8_t* ptr_dst = (int8_t*)&vdst;
+            #pragma unroll N
+            for(int j = 0; j < N; ++j) {
+                ptr_dst[j] = float_to_int8_rn(reg_i[k][j] * tmp_scale);
             }
-            __syncthreads();
-            float const tmp_scale = 448.0f * __builtin_mxc_rcpf(block_absmax_val);
-            for (int i = tid*N, k = 0; i < hidden_size; i += stride, k++) {
-              VT1 vdst;
-              uint32_t* ptr_reg_dst = (uint32_t*)&vdst;
-              #pragma unroll
-              for(int j = 0; j < N; j += 4) {
-                v4f16 reg_tmp;
-                #pragma unroll 4
-                for(int t = 0; t < 4; t++) {
-                  reg_tmp[t] = _Float16(reg_i[k][j + t] * tmp_scale);
-                }
-                *ptr_reg_dst++ = __builtin_mxc_cvt_pk4_f16tof8(reg_tmp);
-              }
-              *(VT1*)(ptr_output + i) = vdst;
-          }
-        } else {
-          if (tid == 0) {
-              block_absmax_val = block_absmax_val_maybe;
-              ptr_scale[0] = block_absmax_val * 0.0078740157;
-          }
-          __syncthreads();
-          float const tmp_scale = 127.0f * __builtin_mxc_rcpf(block_absmax_val);
-          for (int i = tid*N, k = 0; i < hidden_size; i += stride, k++) {
-              VT1 vdst;
-              int8_t* ptr_dst = (int8_t*)&vdst;
-              #pragma unroll N
-              for(int j = 0; j < N; ++j) {
-                  ptr_dst[j] = float_to_int8_rn(reg_i[k][j] * tmp_scale);
-              }
-              *(VT1*)(ptr_output + i) = vdst;
-          } 
+            *(VT1*)(ptr_output + i) = vdst;
         }
     }
 }
 
-template<typename T, typename T1, typename VT, typename VT1, int NUM_VT, int NUM_THREADS, int type> 
+template<typename T, typename T1, typename VT, typename VT1, int NUM_VT, int NUM_THREADS> 
 __global__ void silu_and_mul_mask_quant_pack_1mask(T* input, T* output,T1* mask, int grid_size, int64_t num_tokens, int64_t hidden_size, int64_t out_stirde)
 {
     constexpr int N = sizeof(VT) / sizeof(T);
@@ -1020,52 +988,29 @@ __global__ void silu_and_mul_mask_quant_pack_1mask(T* input, T* output,T1* mask,
         using BlockReduce = cub::BlockReduce<float, NUM_THREADS>;
         __shared__ typename BlockReduce::TempStorage reduceStorage;
         float const block_absmax_val_maybe =
-           BlockReduce(reduceStorage).Reduce(absmax_val, cub::Max{}, NUM_THREADS);
+            BlockReduce(reduceStorage).Reduce(absmax_val, cub::Max{}, NUM_THREADS);
         __shared__ float block_absmax_val;
         int8_t* ptr_output = (int8_t*)(output + token_idx * out_stirde);
         float* ptr_scale = (float*)(ptr_output + hidden_size);
-        if constexpr(type == 0) {
-            if (tid == 0) {
-              block_absmax_val = block_absmax_val_maybe;
-              ptr_scale[0] = block_absmax_val * 0.002232142857;
+        if (tid == 0) {
+            block_absmax_val = block_absmax_val_maybe;
+            ptr_scale[0] = block_absmax_val * 0.0078740157;
+        }
+        __syncthreads();
+        float const tmp_scale = 127.0f * __builtin_mxc_rcpf(block_absmax_val);
+        for (int i = tid*N, k = 0; i < hidden_size; i += stride, k++) {
+            VT1 vdst;
+            int8_t* ptr_dst = (int8_t*)&vdst;
+            #pragma unroll N
+            for(int j = 0; j < N; ++j) {
+                ptr_dst[j] = float_to_int8_rn(reg_i[k][j] * tmp_scale);
             }
-            __syncthreads();
-            float const tmp_scale = 448.0f * __builtin_mxc_rcpf(block_absmax_val);
-            for (int i = tid*N, k = 0; i < hidden_size; i += stride, k++) {
-              VT1 vdst;
-              uint32_t* ptr_reg_dst = (uint32_t*)&vdst;
-              #pragma unroll
-              for(int j = 0; j < N; j += 4) {
-                v4f16 reg_tmp;
-                #pragma unroll 4
-                for(int t = 0; t < 4; t++) {
-                  reg_tmp[t] = _Float16(reg_i[k][j + t] * tmp_scale);
-                }
-                *ptr_reg_dst++ = __builtin_mxc_cvt_pk4_f16tof8(reg_tmp);
-              }
-              *(VT1*)(ptr_output + i) = vdst;
-          }
-        } else {
-          if (tid == 0) {
-              block_absmax_val = block_absmax_val_maybe;
-              ptr_scale[0] = block_absmax_val * 0.0078740157;
-          }
-          __syncthreads();
-          float const tmp_scale = 127.0f * __builtin_mxc_rcpf(block_absmax_val);
-          for (int i = tid*N, k = 0; i < hidden_size; i += stride, k++) {
-              VT1 vdst;
-              int8_t* ptr_dst = (int8_t*)&vdst;
-              #pragma unroll N
-              for(int j = 0; j < N; ++j) {
-                  ptr_dst[j] = float_to_int8_rn(reg_i[k][j] * tmp_scale);
-              }
-              *(VT1*)(ptr_output + i) = vdst;
-          } 
+            *(VT1*)(ptr_output + i) = vdst;
         }
     }
 }
 
-template<typename T, typename T1, typename VT, typename VT1, typename VMASK_TYPE, int NUM_VT, int NUM_THREADS, int type> 
+template<typename T, typename T1, typename VT, typename VT1, typename VMASK_TYPE, int NUM_VT, int NUM_THREADS> 
 __global__ void silu_and_mul_mask_quant_pack_2mask(T* input, T* output,T1* mask, int grid_size, int64_t num_tokens, int64_t hidden_size, int64_t out_stirde)
 {
     constexpr int N = sizeof(VT) / sizeof(T);
@@ -1106,52 +1051,29 @@ __global__ void silu_and_mul_mask_quant_pack_2mask(T* input, T* output,T1* mask,
         using BlockReduce = cub::BlockReduce<float, NUM_THREADS>;
         __shared__ typename BlockReduce::TempStorage reduceStorage;
         float const block_absmax_val_maybe =
-           BlockReduce(reduceStorage).Reduce(absmax_val, cub::Max{}, NUM_THREADS);
+            BlockReduce(reduceStorage).Reduce(absmax_val, cub::Max{}, NUM_THREADS);
         __shared__ float block_absmax_val;
         int8_t* ptr_output = (int8_t*)(output + token_idx * out_stirde);
         float* ptr_scale = (float*)(ptr_output + hidden_size);
-        if constexpr(type == 0) {
-            if (tid == 0) {
-              block_absmax_val = block_absmax_val_maybe;
-              ptr_scale[0] = block_absmax_val * 0.002232142857;
+        if (tid == 0) {
+            block_absmax_val = block_absmax_val_maybe;
+            ptr_scale[0] = block_absmax_val * 0.0078740157;
+        }
+        __syncthreads();
+        float const tmp_scale = 127.0f * __builtin_mxc_rcpf(block_absmax_val);
+        for (int i = tid*N, k = 0; i < hidden_size; i += stride, k++) {
+            VT1 vdst;
+            int8_t* ptr_dst = (int8_t*)&vdst;
+            #pragma unroll N
+            for(int j = 0; j < N; ++j) {
+                ptr_dst[j] = float_to_int8_rn(reg_i[k][j] * tmp_scale);
             }
-            __syncthreads();
-            float const tmp_scale = 448.0f * __builtin_mxc_rcpf(block_absmax_val);
-            for (int i = tid*N, k = 0; i < hidden_size; i += stride, k++) {
-              VT1 vdst;
-              uint32_t* ptr_reg_dst = (uint32_t*)&vdst;
-              #pragma unroll
-              for(int j = 0; j < N; j += 4) {
-                v4f16 reg_tmp;
-                #pragma unroll 4
-                for(int t = 0; t < 4; t++) {
-                  reg_tmp[t] = _Float16(reg_i[k][j + t] * tmp_scale);
-                }
-                *ptr_reg_dst++ = __builtin_mxc_cvt_pk4_f16tof8(reg_tmp);
-              }
-              *(VT1*)(ptr_output + i) = vdst;
-          }
-        } else {
-          if (tid == 0) {
-              block_absmax_val = block_absmax_val_maybe;
-              ptr_scale[0] = block_absmax_val * 0.0078740157;
-          }
-          __syncthreads();
-          float const tmp_scale = 127.0f * __builtin_mxc_rcpf(block_absmax_val);
-          for (int i = tid*N, k = 0; i < hidden_size; i += stride, k++) {
-              VT1 vdst;
-              int8_t* ptr_dst = (int8_t*)&vdst;
-              #pragma unroll N
-              for(int j = 0; j < N; ++j) {
-                  ptr_dst[j] = float_to_int8_rn(reg_i[k][j] * tmp_scale);
-              }
-              *(VT1*)(ptr_output + i) = vdst;
-          } 
+            *(VT1*)(ptr_output + i) = vdst;
         }
     }
 }
 
-template<typename T, typename VT, typename VT1, int NUM_VT, int type> 
+template<typename T, typename VT, typename VT1, int NUM_VT> 
 __global__ void silu_and_mul_quant(T* input, int8_t* output, float* scale, int64_t hidden_size, int blockDim_x)
 {
     constexpr int N = sizeof(VT) / sizeof(T);
@@ -1183,51 +1105,27 @@ __global__ void silu_and_mul_quant(T* input, int8_t* output, float* scale, int64
     using BlockReduce = cub::BlockReduce<float, 512>;
     __shared__ typename BlockReduce::TempStorage reduceStorage;
     float const block_absmax_val_maybe =
-       BlockReduce(reduceStorage).Reduce(absmax_val, cub::Max(), blockDim_x);
+        BlockReduce(reduceStorage).Reduce(absmax_val, cub::Max{}, blockDim_x);
     __shared__ float block_absmax_val;
     int8_t* ptr_output = (int8_t*)(output + token_idx * hidden_size);
-    float* ptr_scale = scale + token_idx;
-    if constexpr(type == 0) {
-        if (tid == 0) {
-          block_absmax_val = block_absmax_val_maybe;
-          ptr_scale[0] = block_absmax_val * 0.002232142857;
+    if (tid == 0) {
+        block_absmax_val = block_absmax_val_maybe;
+        scale[token_idx] = block_absmax_val * 0.0078740157;
+    }
+    __syncthreads();
+    float const tmp_scale = 127.0f * __builtin_mxc_rcpf(block_absmax_val);
+    for (int i = tid*N, k = 0; i < hidden_size; i += stride, k++) {
+        VT1 vdst;
+        int8_t* ptr_dst = (int8_t*)&vdst;
+        #pragma unroll N
+        for(int j = 0; j < N; ++j) {
+            ptr_dst[j] = float_to_int8_rn(reg_i[k][j] * tmp_scale);
         }
-        __syncthreads();
-        float const tmp_scale = 448.0f * __builtin_mxc_rcpf(block_absmax_val);
-        for (int i = tid*N, k = 0; i < hidden_size; i += stride, k++) {
-          VT1 vdst;
-          uint32_t* ptr_reg_dst = (uint32_t*)&vdst;
-          #pragma unroll
-          for(int j = 0; j < N; j += 4) {
-            v4f16 reg_tmp;
-            #pragma unroll 4
-            for(int t = 0; t < 4; t++) {
-              reg_tmp[t] = _Float16(reg_i[k][j + t] * tmp_scale);
-            }
-            *ptr_reg_dst++ = __builtin_mxc_cvt_pk4_f16tof8(reg_tmp);
-          }
-          *(VT1*)(ptr_output + i) = vdst;
-      }
-    } else {
-      if (tid == 0) {
-          block_absmax_val = block_absmax_val_maybe;
-          ptr_scale[0] = block_absmax_val * 0.0078740157;
-      }
-      __syncthreads();
-      float const tmp_scale = 127.0f * __builtin_mxc_rcpf(block_absmax_val);
-      for (int i = tid*N, k = 0; i < hidden_size; i += stride, k++) {
-          VT1 vdst;
-          int8_t* ptr_dst = (int8_t*)&vdst;
-          #pragma unroll N
-          for(int j = 0; j < N; ++j) {
-              ptr_dst[j] = float_to_int8_rn(reg_i[k][j] * tmp_scale);
-          }
-          *(VT1*)(ptr_output + i) = vdst;
-      } 
+        *(VT1*)(ptr_output + i) = vdst;
     }
 }
 
-template<typename T, typename VT, typename VT1, int NUM_VT, int type> 
+template<typename T, typename VT, typename VT1, int NUM_VT> 
 __global__ void silu_and_mul_sm_quant(T* input, int8_t* output, float* scale, int64_t hidden_size, int blockDim_x)
 {
     constexpr int N = sizeof(VT) / sizeof(T);
@@ -1281,47 +1179,21 @@ __global__ void silu_and_mul_sm_quant(T* input, int8_t* output, float* scale, in
     using BlockReduce = cub::BlockReduce<float, 512>;
     __shared__ typename BlockReduce::TempStorage reduceStorage;
     float const block_absmax_val_maybe =
-       BlockReduce(reduceStorage).Reduce(absmax_val, cub::Max(), blockDim_x);
+        BlockReduce(reduceStorage).Reduce(absmax_val, cub::Max{}, blockDim_x);
     __shared__ float block_absmax_val;
     int8_t* ptr_output = (int8_t*)(output + token_idx * hidden_size);
-    if constexpr(type == 0) {
-      if (tid == 0) {
+    if (tid == 0) {
         block_absmax_val = block_absmax_val_maybe;
-        scale[token_idx] = block_absmax_val * 0.002232142857;
-      }
-    } else {
-      if (tid == 0) {
-          block_absmax_val = block_absmax_val_maybe;
-          scale[token_idx] = block_absmax_val * 0.0078740157;
-      }
+        scale[token_idx] = block_absmax_val * 0.0078740157;
     }
     __syncthreads();
-    float tmp_scale;
-    if constexpr(type == 0) {
-      tmp_scale = 448.0f * __builtin_mxc_rcpf(block_absmax_val);
-    } else {
-      tmp_scale = 127.0f * __builtin_mxc_rcpf(block_absmax_val);
-    }
-
+    float const tmp_scale = 127.0f * __builtin_mxc_rcpf(block_absmax_val);
     for (int i = tid*N, k = 0; i < hidden_size1; i += stride, k++) {
         VT1 vdst;
-        if constexpr(type == 0) {
-            uint32_t* ptr_reg_dst = (uint32_t*)&vdst;
-            #pragma unroll
-            for(int j = 0; j < N; j += 4) {
-              v4f16 reg_tmp;
-              #pragma unroll 4
-              for(int t = 0; t < 4; t++) {
-                reg_tmp[t] = _Float16(reg_i[k][j + t] * tmp_scale);
-              }
-              *ptr_reg_dst++ = __builtin_mxc_cvt_pk4_f16tof8(reg_tmp);
-            }
-        } else {
-          int8_t* ptr_dst = (int8_t*)&vdst;
-          #pragma unroll N
-          for(int j = 0; j < N; ++j) {
-              ptr_dst[j] = float_to_int8_rn(reg_i[k][j] * tmp_scale);
-          }
+        int8_t* ptr_dst = (int8_t*)&vdst;
+        #pragma unroll N
+        for(int j = 0; j < N; ++j) {
+            ptr_dst[j] = float_to_int8_rn(reg_i[k][j] * tmp_scale);
         }
         *(VT1*)(ptr_output + i) = vdst;
     }
@@ -1329,36 +1201,23 @@ __global__ void silu_and_mul_sm_quant(T* input, int8_t* output, float* scale, in
     ptr_output = ptr_output + hidden_size1;
     for(int i = tid*N; i < remain_hidden_size; i += stride) {
         VT1 vdst;
+        int8_t* ptr_dst = (int8_t*)&vdst;
         float* ptr_sm = sm_gate + i;
-        if constexpr(type == 0) {
-          uint32_t* ptr_reg_dst = (uint32_t*)&vdst;
-          #pragma unroll
-          for(int j = 0; j < N; j += 4) {
-            v4f16 reg_tmp;
-            #pragma unroll 4
-            for(int t = 0; t < 4; t++) {
-              reg_tmp[t] = _Float16(ptr_sm[j + t] * tmp_scale);
-            }
-            *ptr_reg_dst++ = __builtin_mxc_cvt_pk4_f16tof8(reg_tmp);
-          }
-        } else {
-          int8_t* ptr_dst = (int8_t*)&vdst;
-          #pragma unroll N
-          for(int j = 0; j < N; ++j) {
-              ptr_dst[j] = float_to_int8_rn(ptr_sm[j] * tmp_scale);
-          }
+        #pragma unroll N
+        for(int j = 0; j < N; ++j) {
+            ptr_dst[j] = float_to_int8_rn(ptr_sm[j] * tmp_scale);
         }
         *(VT1*)(ptr_output + i) = vdst;
     }
 }
 
-template<typename T, typename T1, int type>
+template<typename T, typename T1>
 void launch_silu_mul_quant_pack(T* input, T* output, T1* mask, int64_t num_tokens, int64_t hidden_size, int64_t out_stride, int64_t mask_size,cudaStream_t stream) {
     int dev = 0;
     cudaGetDevice(&dev);
     int sm_count = 0;
     cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, dev);
-    int gridsize = sm_count*4;
+    int gridsize = sm_count;
     int64_t inner_hidden_size = hidden_size / 2;
     int blocksize = 512;
     int N = sizeof(float4) / sizeof(T);
@@ -1366,21 +1225,21 @@ void launch_silu_mul_quant_pack(T* input, T* output, T1* mask, int64_t num_token
         int base = blocksize * N;
         if(inner_hidden_size <= 64*N) {
           gridsize = gridsize * 8;
-          silu_and_mul_mask_quant_pack_1mask<T, T1, float4, float2, 1, 64, type><<<gridsize, 64,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
+          silu_and_mul_mask_quant_pack_1mask<T, T1, float4, float2, 1, 64><<<gridsize, 64,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
         } else if(inner_hidden_size <= 128*N) {
           gridsize = gridsize * 4;
-          silu_and_mul_mask_quant_pack_1mask<T, T1, float4, float2, 1, 128, type><<<gridsize, 128,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
+          silu_and_mul_mask_quant_pack_1mask<T, T1, float4, float2, 1, 128><<<gridsize, 128,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
         } else if(inner_hidden_size <= 256*N) {
           gridsize = gridsize * 2;
-          silu_and_mul_mask_quant_pack_1mask<T, T1, float4, float2, 1, 256, type><<<gridsize, 256,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
+          silu_and_mul_mask_quant_pack_1mask<T, T1, float4, float2, 1, 256><<<gridsize, 256,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
         } else if(inner_hidden_size <= base) {
-            silu_and_mul_mask_quant_pack_1mask<T, T1, float4, float2, 1, 512, type><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
+            silu_and_mul_mask_quant_pack_1mask<T, T1, float4, float2, 1, 512><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
         } else if(inner_hidden_size <= base*2) {
-            silu_and_mul_mask_quant_pack_1mask<T, T1, float4, float2, 2, 512, type><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
+            silu_and_mul_mask_quant_pack_1mask<T, T1, float4, float2, 2, 512><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
         } else if(inner_hidden_size <= base * 3) {
-            silu_and_mul_mask_quant_pack_1mask<T, T1, float4, float2, 3, 512, type><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
+            silu_and_mul_mask_quant_pack_1mask<T, T1, float4, float2, 3, 512><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
         } else if(inner_hidden_size <= base * 4) {
-            silu_and_mul_mask_quant_pack_1mask<T, T1, float4, float2, 4, 512, type><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
+            silu_and_mul_mask_quant_pack_1mask<T, T1, float4, float2, 4, 512><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
         } else {
             assert(0);
         }
@@ -1389,42 +1248,42 @@ void launch_silu_mul_quant_pack(T* input, T* output, T1* mask, int64_t num_token
         if(sizeof(T1) == 4) {
           if(inner_hidden_size <= 64 * N) {
             gridsize = gridsize * 8;
-            silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float2, 1, 64, type><<<gridsize, 64,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
+            silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float2, 1, 64><<<gridsize, 64,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
           } else if(inner_hidden_size <= 128 * N){
             gridsize = gridsize * 4;
-            silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float2, 1, 128, type><<<gridsize, 128,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
+            silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float2, 1, 128><<<gridsize, 128,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
           } else if(inner_hidden_size <= 256 * N) {
             gridsize = gridsize * 2;
-            silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float2, 1, 256, type><<<gridsize, 256,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
+            silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float2, 1, 256><<<gridsize, 256,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
           } else if(inner_hidden_size <= base) {
-              silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float2, 1, 512,type><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
+              silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float2, 1, 512><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
           } else if(inner_hidden_size <= base*2) {
-              silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float2, 2, 512,type><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
+              silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float2, 2, 512><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
           } else if(inner_hidden_size <= base * 3) {
-              silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float2, 3, 512, type><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
+              silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float2, 3, 512><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
           } else if(inner_hidden_size <= base * 4) {
-              silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float2, 4, 512, type><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
+              silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float2, 4, 512><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
           } else {
               assert(0);
           }
         } else if(sizeof(T1) == 8) {
           if(inner_hidden_size <= 64 * N) {
             gridsize = gridsize * 8;
-            silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float4, 1, 64, type><<<gridsize, 64,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
+            silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float4, 1, 64><<<gridsize, 64,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
           } else if(inner_hidden_size <= 128 * N) {
             gridsize = gridsize * 4;
-            silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float4, 1, 128, type><<<gridsize, 128,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
+            silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float4, 1, 128><<<gridsize, 128,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
           } else if(inner_hidden_size <= 256 * N) {
             gridsize = gridsize * 2;
-            silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float4, 1, 256, type><<<gridsize, 256,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
+            silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float4, 1, 256><<<gridsize, 256,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
           } else if(inner_hidden_size <= base) {
-              silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float4, 1, 512, type><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
+              silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float4, 1, 512><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
           } else if(inner_hidden_size <= base*2) {
-              silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float4, 2, 512, type><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
+              silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float4, 2, 512><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
           } else if(inner_hidden_size <= base * 3) {
-              silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float4, 3,512, type><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
+              silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float4, 3,512><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
           } else if(inner_hidden_size <= base * 4) {
-              silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float4, 4, 512, type><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
+              silu_and_mul_mask_quant_pack_2mask<T, T1, float4, float2, float4, 4, 512><<<gridsize, 512,0,stream>>>(input, output, mask, gridsize, num_tokens, inner_hidden_size, out_stride);
           } else {
               assert(0);
           }
@@ -1433,13 +1292,13 @@ void launch_silu_mul_quant_pack(T* input, T* output, T1* mask, int64_t num_token
     } else if(N == 8&&(inner_hidden_size & (N - 1)) == 0 && (out_stride & (N -1)) == 0) {
         int base = blocksize * N;
         if(inner_hidden_size <= base) {
-            silu_and_mul_mask_quant_pack<T, T1, float4, float2, 1, type><<<gridsize, blocksize,0,stream>>>(input, output, mask, mask_size, gridsize, num_tokens, inner_hidden_size, out_stride, blocksize);
+            silu_and_mul_mask_quant_pack<T, T1, float4, float2, 1><<<gridsize, blocksize,0,stream>>>(input, output, mask, mask_size, gridsize, num_tokens, inner_hidden_size, out_stride, blocksize);
         } else if(inner_hidden_size <= base*2) {
-            silu_and_mul_mask_quant_pack<T, T1, float4, float2, 2, type><<<gridsize, blocksize,0,stream>>>(input, output, mask, mask_size, gridsize, num_tokens, inner_hidden_size, out_stride, blocksize);
+            silu_and_mul_mask_quant_pack<T, T1, float4, float2, 2><<<gridsize, blocksize,0,stream>>>(input, output, mask, mask_size, gridsize, num_tokens, inner_hidden_size, out_stride, blocksize);
         } else if(inner_hidden_size <= base * 3) {
-            silu_and_mul_mask_quant_pack<T, T1, float4, float2, 3, type><<<gridsize, blocksize,0,stream>>>(input, output, mask, mask_size, gridsize, num_tokens, inner_hidden_size, out_stride, blocksize);
+            silu_and_mul_mask_quant_pack<T, T1, float4, float2, 3><<<gridsize, blocksize,0,stream>>>(input, output, mask, mask_size, gridsize, num_tokens, inner_hidden_size, out_stride, blocksize);
         } else if(inner_hidden_size <= base * 4) {
-            silu_and_mul_mask_quant_pack<T, T1, float4, float2, 4, type><<<gridsize, blocksize,0,stream>>>(input, output, mask, mask_size, gridsize, num_tokens, inner_hidden_size, out_stride, blocksize);
+            silu_and_mul_mask_quant_pack<T, T1, float4, float2, 4><<<gridsize, blocksize,0,stream>>>(input, output, mask, mask_size, gridsize, num_tokens, inner_hidden_size, out_stride, blocksize);
         } else {
             assert(0);
         }
@@ -1448,7 +1307,7 @@ void launch_silu_mul_quant_pack(T* input, T* output, T1* mask, int64_t num_token
     }
 }
 
-template<typename T, int type>
+template<typename T>
 void launch_silu_mul_quan_no_mask(T* input, int8_t* output, float* scale, int64_t num_tokens, int64_t hidden_size,cudaStream_t stream) {
     int64_t inner_hidden_size = hidden_size / 2;
     int blocksize = 512;
@@ -1456,15 +1315,15 @@ void launch_silu_mul_quan_no_mask(T* input, int8_t* output, float* scale, int64_
     if(N == 8&&(inner_hidden_size & (N - 1)) == 0) {
         int base = blocksize * N;
         if(inner_hidden_size <= base) {
-            silu_and_mul_quant<T, float4, float2, 1, type><<<num_tokens, blocksize,0,stream>>>(input, output, scale, inner_hidden_size, blocksize);
+            silu_and_mul_quant<T, float4, float2, 1><<<num_tokens, blocksize,0,stream>>>(input, output, scale, inner_hidden_size, blocksize);
         } else if(inner_hidden_size <= base*2) {
-            silu_and_mul_quant<T, float4, float2, 2, type><<<num_tokens, blocksize,0,stream>>>(input, output, scale, inner_hidden_size, blocksize);
+            silu_and_mul_quant<T, float4, float2, 2><<<num_tokens, blocksize,0,stream>>>(input, output, scale, inner_hidden_size, blocksize);
         } else if(inner_hidden_size <= base * 3) {
-            silu_and_mul_quant<T, float4, float2, 3, type><<<num_tokens, blocksize,0,stream>>>(input, output, scale, inner_hidden_size, blocksize);
+            silu_and_mul_quant<T, float4, float2, 3><<<num_tokens, blocksize,0,stream>>>(input, output, scale, inner_hidden_size, blocksize);
         } else if(inner_hidden_size <= base * 4) {
-            silu_and_mul_quant<T, float4, float2, 4, type><<<num_tokens, blocksize,0,stream>>>(input, output, scale, inner_hidden_size, blocksize);
+            silu_and_mul_quant<T, float4, float2, 4><<<num_tokens, blocksize,0,stream>>>(input, output, scale, inner_hidden_size, blocksize);
         } else if(inner_hidden_size <= base*4 + 4096) {
-            silu_and_mul_sm_quant<T, float4, float2, 4, type><<<num_tokens, blocksize,0,stream>>>(input, output, scale, inner_hidden_size, blocksize);
+            silu_and_mul_sm_quant<T, float4, float2, 4><<<num_tokens, blocksize,0,stream>>>(input, output, scale, inner_hidden_size, blocksize);
         } else {
             printf("silu_and_mul_quant not support\n");
             assert(0);
@@ -1472,15 +1331,15 @@ void launch_silu_mul_quan_no_mask(T* input, int8_t* output, float* scale, int64_
     } else if(N == 4 && (inner_hidden_size & (N - 1)) == 0) {
         int base = blocksize * N;
         if(inner_hidden_size <= base) {
-            silu_and_mul_quant<T, float4, float, 1, type><<<num_tokens, blocksize,0,stream>>>(input, output, scale, inner_hidden_size, blocksize);
+            silu_and_mul_quant<T, float4, float, 1><<<num_tokens, blocksize,0,stream>>>(input, output, scale, inner_hidden_size, blocksize);
         } else if(inner_hidden_size <= base*2) {
-            silu_and_mul_quant<T, float4, float, 2, type><<<num_tokens, blocksize,0,stream>>>(input, output, scale, inner_hidden_size, blocksize);
+            silu_and_mul_quant<T, float4, float, 2><<<num_tokens, blocksize,0,stream>>>(input, output, scale, inner_hidden_size, blocksize);
         } else if(inner_hidden_size <= base * 3) {
-            silu_and_mul_quant<T, float4, float, 3, type><<<num_tokens, blocksize,0,stream>>>(input, output, scale, inner_hidden_size, blocksize);
+            silu_and_mul_quant<T, float4, float, 3><<<num_tokens, blocksize,0,stream>>>(input, output, scale, inner_hidden_size, blocksize);
         } else if(inner_hidden_size <= base * 4) {
-            silu_and_mul_quant<T, float4, float, 4, type><<<num_tokens, blocksize,0,stream>>>(input, output, scale, inner_hidden_size, blocksize);
+            silu_and_mul_quant<T, float4, float, 4><<<num_tokens, blocksize,0,stream>>>(input, output, scale, inner_hidden_size, blocksize);
         } else if(inner_hidden_size <= base * 8) {
-            silu_and_mul_quant<T, float4, float, 8, type><<<num_tokens, blocksize,0,stream>>>(input, output, scale, inner_hidden_size, blocksize);
+            silu_and_mul_quant<T, float4, float, 8><<<num_tokens, blocksize,0,stream>>>(input, output, scale, inner_hidden_size, blocksize);
         } else {
             printf("silu_and_mul_quant not support\n");
             assert(0);
@@ -1932,7 +1791,7 @@ void dynamic_scaled_int8_mask_quant(
             cudaGetDevice(&dev);
             int sm_count = 0;
             cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, dev);
-            int gridsize = sm_count*4;
+            int gridsize = sm_count;
             if(hidden_size <= 4096 && ((hidden_size & (n - 1)) == 0) && n == 8) {
               int blocksize = 512;
               dynamic_scaled_int8_quant_mask_kernel_sreg_opt<scalar_t, float, float4, float2><<<gridsize, blocksize, 0, stream>>>(input.data_ptr<scalar_t>(),out.data_ptr<int8_t>(),scales.data_ptr<float>(),hidden_size,blocksize,num_tokens_batch,mask_size,gridsize,mask.data_ptr<int>());
@@ -2012,43 +1871,12 @@ void fused_silu_mul_dq_mask_quant_pack(
   switch(mask.element_size()) {
     case 8:
       MOE_DISPATCH_FLOATING_TYPES(input.scalar_type(), "launch_silu_mul_quant_pack", [&] {
-        launch_silu_mul_quant_pack<scalar_t, int64_t, 1>(input.data_ptr<scalar_t>(), out.data_ptr<scalar_t>(), mask.data_ptr<int64_t>(), num_tokens_batch, hidden_size, out_stride, mask_size, stream);
+        launch_silu_mul_quant_pack<scalar_t, int64_t>(input.data_ptr<scalar_t>(), out.data_ptr<scalar_t>(), mask.data_ptr<int64_t>(), num_tokens_batch, hidden_size, out_stride, mask_size, stream);
       });
     break;
     case 4:
        MOE_DISPATCH_FLOATING_TYPES(input.scalar_type(), "launch_silu_mul_quant_pack", [&] {
-        launch_silu_mul_quant_pack<scalar_t, int32_t, 1>(input.data_ptr<scalar_t>(), out.data_ptr<scalar_t>(), mask.data_ptr<int32_t>(), num_tokens_batch, hidden_size, out_stride, mask_size, stream);
-      });
-      break;
-    default:
-    return;
-  }
-}
-
-void fused_silu_mul_dq_mask_quant_fp8_pack(
-    torch::Tensor& out,          
-    torch::Tensor const& input, 
-    torch::Tensor const &mask)
-{
-  TORCH_CHECK(input.is_contiguous());
-  TORCH_CHECK(out.is_contiguous());
-  TORCH_CHECK(mask.is_contiguous());
-  int64_t const hidden_size = input.size(-1);
-  int64_t const num_tokens = input.numel() / hidden_size;
-  int64_t const mask_size = mask.numel();
-  int64_t const num_tokens_batch = num_tokens / mask_size;
-  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  int64_t out_stride = ((hidden_size/4 + 2) + 255)/ 256 * 256;
-  
-  switch(mask.element_size()) {
-    case 8:
-      MOE_DISPATCH_FLOATING_TYPES(input.scalar_type(), "launch_silu_mul_quant_pack", [&] {
-        launch_silu_mul_quant_pack<scalar_t, int64_t, 0>(input.data_ptr<scalar_t>(), out.data_ptr<scalar_t>(), mask.data_ptr<int64_t>(), num_tokens_batch, hidden_size, out_stride, mask_size, stream);
-      });
-    break;
-    case 4:
-       MOE_DISPATCH_FLOATING_TYPES(input.scalar_type(), "launch_silu_mul_quant_pack", [&] {
-        launch_silu_mul_quant_pack<scalar_t, int32_t, 0>(input.data_ptr<scalar_t>(), out.data_ptr<scalar_t>(), mask.data_ptr<int32_t>(), num_tokens_batch, hidden_size, out_stride, mask_size, stream);
+        launch_silu_mul_quant_pack<scalar_t, int32_t>(input.data_ptr<scalar_t>(), out.data_ptr<scalar_t>(), mask.data_ptr<int32_t>(), num_tokens_batch, hidden_size, out_stride, mask_size, stream);
       });
       break;
     default:
@@ -2057,9 +1885,9 @@ void fused_silu_mul_dq_mask_quant_fp8_pack(
 }
 
 void fused_silu_mul_dq_quant_interface(
-    torch::Tensor& out,
-    torch::Tensor& scale,   
-    torch::Tensor const& input)
+    at::Tensor& out,
+    at::Tensor& scale,   
+    at::Tensor const& input)
 {
   TORCH_CHECK(input.is_contiguous());
   TORCH_CHECK(scale.is_contiguous());
@@ -2067,15 +1895,9 @@ void fused_silu_mul_dq_quant_interface(
   int64_t const hidden_size = input.size(-1);
   int64_t const num_tokens = input.numel() / hidden_size;
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  if(out.dtype() == torch::kFloat8_e4m3fn) {
-      MOE_DISPATCH_FLOATING_TYPES(input.scalar_type(), "launch_silu_mul_quan_no_mask", [&] {
-      launch_silu_mul_quan_no_mask<scalar_t, 0>(input.data_ptr<scalar_t>(), out.data_ptr<int8_t>(), scale.data_ptr<float>(), num_tokens, hidden_size, stream);
-    });
-  } else {
-    MOE_DISPATCH_FLOATING_TYPES(input.scalar_type(), "launch_silu_mul_quan_no_mask", [&] {
-      launch_silu_mul_quan_no_mask<scalar_t, 1>(input.data_ptr<scalar_t>(), out.data_ptr<int8_t>(), scale.data_ptr<float>(), num_tokens, hidden_size, stream);
-    });
-  }
+  MOE_DISPATCH_FLOATING_TYPES(input.scalar_type(), "launch_silu_mul_quan_no_mask", [&] {
+    launch_silu_mul_quan_no_mask<scalar_t>(input.data_ptr<scalar_t>(), out.data_ptr<int8_t>(), scale.data_ptr<float>(), num_tokens, hidden_size, stream);
+  });
 }
 
 void fused_silu_mul_dq_quant_reordered_topk_interface(

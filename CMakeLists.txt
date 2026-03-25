@@ -213,7 +213,6 @@ if (BUILD_VLLM_SUBMODULE)
   set(VLLM_EXT_SRC
     "${VLLM_SRC_DIR}/mamba/mamba_ssm/selective_scan_fwd.cu"
     "${VLLM_SRC_DIR}/cache_kernels.cu"
-    "${VLLM_SRC_DIR}/cache_kernels_fused.cu"
     "${VLLM_SRC_DIR}/attention/paged_attention_v1.cu"
     "${VLLM_SRC_DIR}/attention/paged_attention_v2.cu"
     "${VLLM_SRC_DIR}/attention/merge_attn_states.cu"
@@ -224,8 +223,6 @@ if (BUILD_VLLM_SUBMODULE)
     "${VLLM_SRC_DIR}/layernorm_quant_kernels.cu"
     "${VLLM_SRC_DIR}/fused_qknorm_rope_kernel.cu"
     "${VLLM_SRC_DIR}/sampler.cu"
-    "${VLLM_SRC_DIR}/topk.cu"
-    "${VLLM_SRC_DIR}/dsv3_fused_a_gemm.cu"
     "${VLLM_SRC_DIR}/cuda_view.cu"
     "${VLLM_SRC_DIR}/quantization/gptq/q_gemm.cu"
     "${VLLM_SRC_DIR}/quantization/compressed_tensors/int8_quant_kernels.cu"
@@ -260,7 +257,18 @@ if (BUILD_VLLM_SUBMODULE)
       message(STATUS "The VLLM_CUTLASS_SRC_DIR is set, using ${VLLM_CUTLASS_SRC_DIR} for compilation")
       FetchContent_Declare(cutlass SOURCE_DIR ${VLLM_CUTLASS_SRC_DIR})
     else()
-      message(FATAL_ERROR "Error: Unable to download cutlass automatically. Please download cutlass manually and set the 'VLLM_CUTLASS_SRC_DIR' environment variable.")
+      FetchContent_Declare(
+          cutlass
+          GIT_REPOSITORY https://github.com/nvidia/cutlass.git
+          # Please keep this in sync with CUTLASS_REVISION line above.
+          GIT_TAG ${CUTLASS_REVISION}
+          GIT_PROGRESS TRUE
+
+          # Speed up CUTLASS download by retrieving only the specified GIT_TAG instead of the history.
+          # Important: If GIT_SHALLOW is enabled then GIT_TAG works only with branch names and tags.
+          # So if the GIT_TAG above is updated to a commit hash, GIT_SHALLOW must be set to FALSE
+          GIT_SHALLOW TRUE
+      )
     endif()
     FetchContent_MakeAvailable(cutlass)
 
@@ -354,12 +362,12 @@ if (BUILD_VLLM_SUBMODULE)
   set(VLLM_MOE_EXT_SRC
     "${VLLM_SRC_DIR}/moe/torch_bindings.cpp"
     "${VLLM_SRC_DIR}/moe/moe_align_sum_kernels.cu"
-    #"${VLLM_SRC_DIR}/moe/moe_lora_align_sum_kernels.cu"
+    "${VLLM_SRC_DIR}/moe/moe_lora_align_sum_kernels.cu"
     "${VLLM_SRC_DIR}/moe/topk_softmax_kernels.cu"
     "${VLLM_SRC_DIR}/moe/grouped_topk_kernels.cu")
 
   if (USE_MACA AND ENABLE_BLAS_API)
-    #list(APPEND VLLM_MOE_EXT_SRC "${VLLM_SRC_DIR}/moe/moe_ops.cpp")
+    list(APPEND VLLM_MOE_EXT_SRC "${VLLM_SRC_DIR}/moe/moe_ops.cpp")
 
     set(MCBLAS_INCLUDE_DIR $ENV{MACA_PATH}/include/mcblas)
     set(MCBLAS_LIB $ENV{MACA_PATH}/lib/libmcblas.so)
@@ -368,11 +376,6 @@ if (BUILD_VLLM_SUBMODULE)
   #if(MCOPLIB_GPU_LANG STREQUAL "CUDA")
   #  list(APPEND VLLM_MOE_EXT_SRC "${VLLM_SRC_DIR}/moe/moe_wna16.cu")
   #endif()
-
-  if(MCOPLIB_GPU_LANG STREQUAL "CUDA")
-    list(APPEND VLLM_MOE_EXT_SRC
-      "${VLLM_SRC_DIR}/moe/router_gemm.cu")
-  endif()
 
   set_gencode_flags_for_srcs(
     SRCS "${VLLM_MOE_EXT_SRC}"
@@ -490,9 +493,7 @@ if (BUILD_DEFAULT_OP_SUBMODULE)
       "${MCOPLIB_SRCS_DIR}/fused_add_layernorm_per_token_quant_padding_output.cu"
       "${MCOPLIB_SRCS_DIR}/rms_norm_dynamic_per_token_quant.cu"
       "${MCOPLIB_SRCS_DIR}/fused_moe_gate_deepseek.cu"
-      "${MCOPLIB_SRCS_DIR}/gptq_marlin.cu"
-      "${MCOPLIB_SRCS_DIR}/moe_fused_gate_opt.cu"
-      "${MCOPLIB_SRCS_DIR}/glm_attention_prepare.cu")
+      "${MCOPLIB_SRCS_DIR}/gptq_marlin.cu")
 
   set_gencode_flags_for_srcs(
     SRCS "${MCOPLIB_EXT_SRC}"
@@ -590,7 +591,7 @@ if (BUILD_SGLANG_SUBMODULE)
     INCLUDE_DIRECTORIES ${SGLANG_KERNELS_SRCS_DIR}/csrc/fast_hadamard_transform)
 
   set_target_properties(sgl_kernel PROPERTIES PREFIX "" SUFFIX "${EXT_SUFFIX}")
-  #target_link_libraries(sgl_kernel PRIVATE mctlassEx)
+  target_link_libraries(sgl_kernel PRIVATE mctlassEx)
   #添加编译参数
   target_compile_options(sgl_kernel PRIVATE
       $<$<COMPILE_LANGUAGE:CUDA>:-O3 -std=c++17 -Xcompiler -fPIC -gencode=arch=compute_75,code=sm_75 -gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_89,code=sm_89 -gencode=arch=compute_90,code=sm_90>

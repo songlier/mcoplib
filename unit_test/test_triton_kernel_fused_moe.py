@@ -14,8 +14,7 @@ import argparse
 from datetime import datetime
 from typing import Any, Dict, List, Tuple, TypedDict
 import vllm_metax.patch
-from mcoplib.triton_fused_moe import fused_moe_triton_kernel,fused_moe_triton_kernel_gptq_awq
-from mcoplib.triton_utils import tl, triton
+from mcoplib.triton_fused_moe import vllm_invoke_fused_moe_kernel as vllm_invoke_fused_moe_kernel
 
 # ---- parameters (DeepSeek-R1 ratios, scaled down for safety) ----
 SCALE = float(os.environ.get("DEEPSEEK_UNITTEST_SCALE", "1.0"))
@@ -93,206 +92,6 @@ def reference_moe_with_padding(A: torch.Tensor, B: torch.Tensor,
     # Sum across TOP_K dimension like vLLM does
     return torch.sum(C, dim=1)  # Shape: (M, N)
 
-def invoke_fused_moe_wna16_triton_kernel(
-    A: torch.Tensor,
-    B: torch.Tensor,
-    C: torch.Tensor,
-    B_scale: torch.Tensor | None,
-    B_zp: torch.Tensor | None,
-    topk_weights: torch.Tensor | None,
-    sorted_token_ids: torch.Tensor,
-    expert_ids: torch.Tensor,
-    num_tokens_post_padded: torch.Tensor,
-    mul_routed_weight: bool,
-    top_k: int,
-    config: dict[str, Any],
-    compute_type: tl.dtype,
-    use_int8_w8a16: bool,
-    use_int4_w4a16: bool,
-    block_shape: list[int] | None,
-):
-    assert B_scale is not None and B_scale.ndim == 3
-    assert B_zp is None or B_zp.ndim == 3
-    assert block_shape is not None and block_shape[0] == 0
-
-    M = A.size(0)
-    num_tokens = M * top_k
-
-    EM = sorted_token_ids.size(0)
-    if A.size(0) < config["BLOCK_SIZE_M"]:
-        # optimize for small batch_size.
-        # We assume that top_ids of each token is unique,
-        # so num_valid_experts <= batch_size <= BLOCK_SIZE_M,
-        # and we can skip some invalid blocks.
-        EM = min(sorted_token_ids.size(0), A.size(0) * top_k * config["BLOCK_SIZE_M"])
-    grid = lambda META: (
-        triton.cdiv(EM, META["BLOCK_SIZE_M"])
-        * triton.cdiv(B.size(1), META["BLOCK_SIZE_N"]),
-    )
-
-    fused_moe_triton_kernel_gptq_awq(
-        grid,
-        A,
-        B,
-        C,
-        B_scale,
-        B_zp,
-        topk_weights,
-        sorted_token_ids,
-        expert_ids,
-        num_tokens_post_padded,
-        B.size(1),
-        A.size(1),
-        EM,
-        num_tokens,
-        A.stride(0),
-        A.stride(1),
-        B.stride(0),
-        B.stride(2),
-        B.stride(1),
-        C.stride(1),
-        C.stride(2),
-        B_scale.stride(0),
-        B_scale.stride(2),
-        B_scale.stride(1),
-        B_zp.stride(0) if B_zp is not None else 0,
-        B_zp.stride(2) if B_zp is not None else 0,
-        B_zp.stride(1) if B_zp is not None else 0,
-        block_k_diviable=A.size(1) % config["BLOCK_SIZE_K"] == 0,
-        group_size=block_shape[1],
-        MUL_ROUTED_WEIGHT=mul_routed_weight,
-        top_k=top_k,
-        compute_type=compute_type,
-        has_zp=B_zp is not None,
-        use_int4_w4a16=use_int4_w4a16,
-        use_int8_w8a16=use_int8_w8a16,
-        **config,
-    )
-
-
-def invoke_fused_moe_triton_kernel(
-                            A: torch.Tensor,
-                            B: torch.Tensor,
-                            C: torch.Tensor,
-                            A_scale: torch.Tensor | None,
-                            B_scale: torch.Tensor | None,
-                            topk_weights: torch.Tensor | None,
-                            sorted_token_ids: torch.Tensor,
-                            expert_ids: torch.Tensor,
-                            num_tokens_post_padded: torch.Tensor,
-                            mul_routed_weight: bool,
-                            top_k: int,
-                            config: dict[str, Any],
-                            compute_type: tl.dtype,
-                            use_fp8_w8a8: bool,
-                            use_int8_w8a8: bool,
-                            use_int8_w8a16: bool,
-                            use_int4_w4a16: bool,
-                            per_channel_quant: bool,
-                            block_shape: list[int] | None = None,
-                            B_bias: torch.Tensor | None = None) -> None:
-
-    assert topk_weights is not None or not mul_routed_weight
-    assert topk_weights is None or topk_weights.stride(1) == 1
-    assert sorted_token_ids.stride(0) == 1
-    
-    if use_fp8_w8a8 or use_int8_w8a8:
-        assert B_scale is not None
-        assert block_shape is None or triton.cdiv(
-            B.size(-2), block_shape[0]
-        ) == B_scale.size(-2)
-        assert block_shape is None or triton.cdiv(
-            B.size(-1), block_shape[1]
-        ) == B_scale.size(-1)
-
-    elif use_int8_w8a16 or use_int4_w4a16:
-        assert B_scale is not None
-        assert block_shape is None or block_shape[0] == 0
-    else:
-        assert A_scale is None
-        assert B_scale is None
-
-    M = A.size(0)
-    num_tokens = M * top_k
-
-    EM = sorted_token_ids.size(0)
-    if A.size(0) < config["BLOCK_SIZE_M"]:
-        # optimize for small batch_size.
-        # We assume that top_ids of each token is unique,
-        # so num_valid_experts <= batch_size <= BLOCK_SIZE_M,
-        # and we can skip some invalid blocks.
-        EM = min(sorted_token_ids.size(0), A.size(0) * top_k * config["BLOCK_SIZE_M"])
-    grid = lambda META: (
-        triton.cdiv(EM, META["BLOCK_SIZE_M"]) 
-        * triton.cdiv(
-            # ┌------------------------  Metax Modification -------------------------┐
-            B.shape[1],
-            META['BLOCK_SIZE_N']),
-            META['SPLIT_K'])
-            # └------------------------- Metax Modification -------------------------┘
-    HAS_BIAS = B_bias is not None
-
-    config = config.copy()
-    BLOCK_SIZE_K = config.pop("BLOCK_SIZE_K")
-    if block_shape is not None:
-        BLOCK_SIZE_K = min(BLOCK_SIZE_K, min(block_shape[0], block_shape[1]))
-    
-            # ┌─────────────────────────────────────────────────────────────────────┐
-        # │ 通过 fused_moe_triton_kernel Python接口调用 fused_moe_kernel         │
-        # │ 支持 **config 方式传递配置参数                                       │
-        # └─────────────────────────────────────────────────────────────────────┘
-    fused_moe_triton_kernel(
-            grid=grid,
-            a_ptr=A,
-            b_ptr=B,
-            c_ptr=C,
-            b_bias_ptr=B_bias,
-            a_scale_ptr=A_scale,
-            b_scale_ptr=B_scale,
-            topk_weights_ptr=topk_weights,
-            sorted_token_ids_ptr=sorted_token_ids,
-            expert_ids_ptr=expert_ids,
-            num_tokens_post_padded_ptr=num_tokens_post_padded,
-            N=B.size(1),
-            K=B.size(2),
-            EM=EM,
-            num_valid_tokens=num_tokens,
-            stride_am=A.stride(0),
-            stride_ak=A.stride(1),
-            stride_be=B.stride(0),
-            stride_bk=B.stride(2),
-            stride_bn=B.stride(1),
-            stride_cm=C.stride(1),
-            stride_cn=C.stride(2),
-            stride_asm=A_scale.stride(0) if A_scale is not None and A_scale.ndim == 2 else 0,
-            stride_ask=A_scale.stride(1) if A_scale is not None and A_scale.ndim == 2 else 0,
-            stride_bse=B_scale.stride(0) if B_scale is not None and B_scale.ndim >= 2 else 0,
-            stride_bsk=B_scale.stride(2) if B_scale is not None and B_scale.ndim == 3 else 0,
-            stride_bsn=B_scale.stride(1) if B_scale is not None and B_scale.ndim >= 2 else 0,
-            stride_bbe=B_bias.stride(0) if B_bias is not None else 0,
-            stride_bbn=B_bias.stride(1) if B_bias is not None else 0,
-            group_n=0 if block_shape is None else block_shape[0],
-            group_k=0 if block_shape is None else block_shape[1],
-            naive_block_assignment=(sorted_token_ids is None),
-            # ┌──────────────────────────────────────────────────────────────────┐
-            # │ 通过 **kwargs 传递的配置参数                                       │
-            # └──────────────────────────────────────────────────────────────────┘
-            MUL_ROUTED_WEIGHT=mul_routed_weight,
-            top_k=top_k,
-            compute_type=compute_type,
-            use_fp8_w8a8=use_fp8_w8a8,
-            use_int8_w8a8=use_int8_w8a8,
-            use_int8_w8a16=use_int8_w8a16,
-            per_channel_quant=per_channel_quant,
-            HAS_BIAS=HAS_BIAS,
-            BLOCK_SIZE_K=BLOCK_SIZE_K,
-            # ┌------------------------  Metax Modification -------------------------┐
-            E=B.size(0),
-            FAST_F32_TO_BF16=True,
-            # └------------------------- Metax Modification -------------------------┘
-            **config,
-        )
-
 
 def test_invoke_fused_moe_kernel_only():
     print("=== invoke_fused_moe_kernel final test ===")
@@ -303,6 +102,7 @@ def test_invoke_fused_moe_kernel_only():
 
 
     # import the function under test
+    from vllm_metax.model_executor.layers.fused_moe.fused_moe import invoke_fused_moe_kernel
     from vllm.model_executor.layers.fused_moe.moe_align_block_size import moe_align_block_size  # still OK
 
     # Prepare tensors
@@ -398,23 +198,21 @@ def test_invoke_fused_moe_kernel_only():
     try:
         # Warmup runs
         for _ in range(WARMUP):
-            
-            print(f"invoke_fused_moe_wna16_triton_kernel C tensor:{C.shape}")
-
-            invoke_fused_moe_triton_kernel(
+            vllm_invoke_fused_moe_kernel(
                 A, B, C,
-                A_scale, B_scale,
+                A_scale, B_scale, B_zp,
                 topk_weights,
                 sorted_token_ids, expert_ids,
                 num_tokens_post_padded,
                 mul_routed_weight,
                 TOP_K,
-                config={"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 32, "SPLIT_K":1, "GROUP_SIZE_M":8},
+                config={"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 32, "ACCF32":False, "SPLIT_K":1, "GROUP_SIZE_M":8},
                 compute_type=compute_type,
                 use_fp8_w8a8=False,
                 use_int8_w8a8=False,
                 use_int8_w8a16=False,
                 use_int4_w4a16=False,
+                orig_acc_dtype=torch.bfloat16,
                 per_channel_quant=False,
                 block_shape=None,
                 B_bias=B_bias,
@@ -430,20 +228,21 @@ def test_invoke_fused_moe_kernel_only():
         print(f"Single CPU call time: {cpu_us:.2f} us")
         # Time single CPU call (wall-clock)
         
-        invoke_fused_moe_triton_kernel(
+        vllm_invoke_fused_moe_kernel(
             A, B, C,
-            A_scale, B_scale, 
+            A_scale, B_scale, B_zp,
             topk_weights,
             sorted_token_ids, expert_ids,
             num_tokens_post_padded,
             mul_routed_weight,
             TOP_K,
-            config={"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 32, "SPLIT_K":1, "GROUP_SIZE_M":8},
+            config={"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 32, "ACCF32":False, "SPLIT_K":1, "GROUP_SIZE_M":8},
             compute_type=compute_type,
             use_fp8_w8a8=False,
             use_int8_w8a8=False,
             use_int8_w8a16=False,
             use_int4_w4a16=False,
+            orig_acc_dtype=torch.bfloat16,
             per_channel_quant=False,
             block_shape=None,
             B_bias=B_bias,
@@ -486,20 +285,21 @@ def test_invoke_fused_moe_kernel_only():
             torch.cuda.synchronize()
             evt_s.record()
             for _ in range(ITERS):
-                invoke_fused_moe_triton_kernel(
+                vllm_invoke_fused_moe_kernel(
                     A, B, C,
-                    A_scale, B_scale,
+                    A_scale, B_scale, B_zp,
                     topk_weights,
                     sorted_token_ids, expert_ids,
                     num_tokens_post_padded,
                     mul_routed_weight,
                     TOP_K,
-                    config={"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 32, "SPLIT_K":1, "GROUP_SIZE_M":8},
+                    config={"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 32, "ACCF32":False, "SPLIT_K":1, "GROUP_SIZE_M":8},
                     compute_type=compute_type,
                     use_fp8_w8a8=False,
                     use_int8_w8a8=False,
                     use_int8_w8a16=False,
                     use_int4_w4a16=False,
+                    orig_acc_dtype=torch.bfloat16,
                     per_channel_quant=False,
                     block_shape=None,
                     B_bias=B_bias,
