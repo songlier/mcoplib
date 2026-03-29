@@ -22,6 +22,8 @@
 #include <cuda_runtime.h>
 #include <torch/all.h>
 #include <torch/cuda.h>
+#include "mcoplib_ops_params_info.hpp"
+#include "mcoplib_ops_params_dump.hpp"
 
 #include <cmath>
 
@@ -373,6 +375,8 @@ void fused_qk_norm_rope(
     double high,    // threshold for low frequency
     double attention_factor,  // attention_factor applied on cos and sin
     int64_t rotary_dim) {
+  DEBUG_TRACE_PARAMS(qkv, num_heads_q, num_heads_k, num_heads_v, head_dim, eps, q_weight, k_weight, base, is_neox, position_ids, factor, low, high, attention_factor, rotary_dim);
+  DEBUG_DUMP_PARAMS(qkv, num_heads_q, num_heads_k, num_heads_v, head_dim, eps, q_weight, k_weight, base, is_neox, position_ids, factor, low, high, attention_factor, rotary_dim);
   // Input validation
   TORCH_CHECK(qkv.dim() == 2, "QKV tensor must be 2D: [num_tokens, (num_heads_q+num_heads_k+num_heads_v)*head_dim]");
   TORCH_CHECK(position_ids.dim() == 1, "Position IDs must be 1D: [num_tokens]");
