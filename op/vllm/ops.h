@@ -278,9 +278,9 @@ int64_t ggml_moe_get_block_size(int64_t type);
     std::vector<torch::Tensor> cutlass_sparse_compress(torch::Tensor const& a);
 #endif
 
-void scaled_fp4_quant(torch::Tensor& output, torch::Tensor const& input,
-                      torch::Tensor& output_scale,
-                      torch::Tensor const& input_scale);
+// void scaled_fp4_quant(torch::Tensor& output, torch::Tensor const& input,
+//                       torch::Tensor& output_scale,
+//                       torch::Tensor const& input_scale);
 
 void scaled_fp4_experts_quant(
     torch::Tensor& output, torch::Tensor& output_scale,
