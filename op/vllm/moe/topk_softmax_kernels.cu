@@ -112,6 +112,51 @@ __device__ __forceinline__ void warpSortDescendingNew(float (&idx_and_weight)[2]
     *(int64_t*)idx_and_weight = val;
 }
 
+template<uint64_t MASK=0xffffffffffffffff>
+__device__ __forceinline__ void warpSortDescendingUpdate(float (&idx_and_weight)[2], int tid) {
+
+    int64_t val = *(int64_t*)idx_and_weight;
+    for (int width = 2; width < 64; width <<= 1 ) {
+        for (int step = width >> 1; step > 0; step >>=1) {
+            const bool direction = ((tid & width) == 0);
+            int64_t other_temp_val = __shfl_xor_sync(MASK, val, step);
+            int other_tid = tid ^ step;
+
+            float current_weight_bits = get_weight(val);
+            float other_weight_bits = get_weight(other_temp_val);
+            int current_index = val >> 32;
+            int other_index = other_temp_val >> 32;
+
+            bool weight_gt = other_weight_bits > current_weight_bits;
+            bool weight_eq = other_weight_bits == current_weight_bits;
+            bool index_lt = other_index < current_index;
+
+            bool other_is_big = weight_gt | (weight_eq & index_lt);
+            bool swap = (tid < other_tid) ^ (other_is_big) ^ (direction);
+
+            val = swap ? other_temp_val : val;
+        }
+    }
+    for (int step = 32; step > 0; step >>= 1) {
+        int64_t other_temp_val = __shfl_xor_sync(MASK, val, step);
+        int other_tid = tid ^ step;
+
+        float current_weight_bits = get_weight(val);
+        float other_weight_bits = get_weight(other_temp_val);
+        int current_index = val >> 32;
+        int other_index = other_temp_val >> 32;
+
+        bool weight_gt = other_weight_bits > current_weight_bits;
+        bool weight_eq = other_weight_bits == current_weight_bits;
+        bool index_lt = other_index < current_index;
+
+        bool other_is_big = weight_gt | (weight_eq & index_lt);
+        bool swap = (tid < other_tid) ^ (!other_is_big);
+        val = swap ? other_temp_val : val;
+    }
+    *(int64_t*)idx_and_weight = val;
+}
+
 // Scoring function enums
 enum ScoringFunc {
   SCORING_SOFTMAX = 0, // apply softmax
@@ -748,6 +793,111 @@ __launch_bounds__(WARPS_PER_CTA* WARP_SIZE) __global__
     }
 }
 
+
+template <int VPT, typename IndType, typename InputType = float>
+__global__ void topkGatingSigmoidCommonOpt(const InputType* input, const bool* finished, float* output, const int num_rows, IndType* indices,
+                                           const int start_expert, const int end_expert, const int num_experts, const int rows_per_cta, const bool renormalize,
+                                           const float* bias, const int topk = 8)
+{
+    static_assert(std::is_same_v<InputType, float> || std::is_same_v<InputType, __nv_bfloat16> ||
+                  std::is_same_v<InputType, __half>,
+                  "InputType must be float, __nv_bfloat16, or __half");
+
+    int warps_per_row = (num_experts + 64 - 1) / 64;
+    int threads_per_row = warps_per_row * 64;
+    int row_in_block = threadIdx.x / threads_per_row;
+    const int thread_row = blockIdx.x * rows_per_cta + row_in_block;
+    if(thread_row >= num_rows) {
+        return;
+    }
+
+    const int warp_id = threadIdx.x / 64;
+    const int tid_in_row = threadIdx.x % threads_per_row;
+
+    float row_val, row_val_for_choice = -3.4e38;
+    if(tid_in_row < num_experts) {
+        row_val = static_cast<float>(input[thread_row * num_experts + tid_in_row]);
+        row_val = 1.0f / (1.0f + __expf(-row_val));
+        row_val_for_choice = row_val;
+        if(bias != nullptr) {
+            const int expert_id = tid_in_row;
+            float bias_val = (expert_id < num_experts) ? bias[expert_id] : 0.0f;
+            row_val_for_choice = row_val + bias_val;
+        }
+    }
+
+    bool row_is_active = finished ? !finished[thread_row] : true;
+
+    int64_t expert_id_opt = static_cast<int64_t>(tid_in_row);
+
+    float idx_and_weight[2];
+    float idx_and_weight_2[2];
+    extern __shared__ int8_t shared_memory[];
+    float *norm = (float*)shared_memory;
+    idx_and_weight[0] = row_val_for_choice;
+    idx_and_weight[1] = 0.0f;
+    *((int64_t*)idx_and_weight) |= (expert_id_opt << 32);
+    warpSortDescendingUpdate<0xffffffffffffffff>(idx_and_weight, threadIdx.x);
+    __shared__ float shared_experts[64][2];
+    int col_index = tid_in_row % 64;
+    if (col_index < topk) {
+        *((int64_t*)(shared_experts) + warp_id * topk + col_index) = *(int64_t*)idx_and_weight;
+    }
+    __syncthreads();
+
+    float max_val_ordered;
+    if(tid_in_row < 64){
+        idx_and_weight_2[0] = -3.4e38;
+        *((int64_t*)idx_and_weight_2) |= (tid_in_row << 32);
+        if(tid_in_row < topk * warps_per_row) {
+            *(int64_t*)idx_and_weight_2 = *((int64_t*)shared_experts + (warp_id / warps_per_row) * (topk * warps_per_row) + tid_in_row);
+        }
+        warpSortDescendingUpdate<0xffffffffffffffff>(idx_and_weight_2, threadIdx.x);
+        if (tid_in_row < topk) {
+            int64_t res = *(int64_t*)idx_and_weight_2;
+            max_val_ordered = get_weight(res);
+            int expert_id_ordered = (res >> 32);
+            // subtract bias, restore origin row_val(after topk)
+            if (bias != nullptr) {
+                float bias_val = (expert_id_ordered < num_experts) ? bias[expert_id_ordered] : 0.0f;
+                max_val_ordered = max_val_ordered - bias_val;
+            }
+
+            // Add a guard to ignore experts not included by this node
+            const bool node_uses_expert = expert_id_ordered >= start_expert && expert_id_ordered < end_expert;
+            const bool should_process_row = row_is_active && node_uses_expert;
+
+            // The lead thread from each sub-group will write out the final results to global memory. (This will be a
+            // single) thread per row of the input/output matrices.
+            const int idx = topk * thread_row + tid_in_row;
+            indices[idx] = should_process_row ? (expert_id_ordered - start_expert) : num_experts;
+
+            // source_rows[idx] = tid_in_row * num_rows + thread_row;
+            if (renormalize) {
+                norm[row_in_block * topk + tid_in_row] = static_cast<float>(max_val_ordered);
+            } else {
+                output[idx] = static_cast<float>(max_val_ordered);
+            }
+        }
+    }
+
+    float* norm_val = norm + (blockDim.x / threads_per_row)*topk;
+    if (renormalize) {
+        __syncthreads();
+        if (tid_in_row == 0){
+            norm_val[row_in_block] = 0;
+            for (int i = 0; i < topk; i++) {
+                norm_val[row_in_block] += norm[row_in_block * topk + i];
+            }
+        }
+        __syncthreads();
+        if (tid_in_row < topk) {
+            const int idx = topk * thread_row + tid_in_row;
+            output[idx] = static_cast<float>(max_val_ordered) / norm_val[row_in_block];
+        }
+    }
+}
+
 namespace detail
 {
 // Constructs some constants needed to partition the work across threads at compile time.
@@ -868,6 +1018,24 @@ void topkGatingKernelLauncher(
     static constexpr int BYTES_PER_LDG_MULTIPLE_64 =
     (std::is_same_v<InputType, __nv_bfloat16> || std::is_same_v<InputType, __half>) ? 4 : 8;
 #endif
+    if constexpr(SF == vllm::moe::SCORING_SIGMOID) {
+        if(num_experts <= 256 && topk <= 16) {
+            int warps_per_row = (num_experts + 64 - 1) / 64;
+            int threads_per_row = warps_per_row * 64;
+            int blocksize = 256;
+            int rows_per_cta = blocksize / threads_per_row;
+
+            topkGatingSigmoidCommonOpt<1, IndType, InputType>
+                <<< (num_tokens + rows_per_cta - 1) / rows_per_cta,
+                    blocksize,
+                    sizeof(float) * ((blocksize / threads_per_row) * topk + rows_per_cta),
+                    stream >>>
+            ((const InputType*)gating_output, nullptr, topk_weights, num_tokens, topk_indices, 0,
+            num_experts, num_experts, rows_per_cta, renormalize, bias, topk);
+
+            return;
+        }
+    }
     switch (num_experts) {
         case 1:
             LAUNCH_TOPK(1, WARPS_PER_TB, BYTES_PER_LDG_POWER_OF_2);
