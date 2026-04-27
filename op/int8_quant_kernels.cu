@@ -14,6 +14,9 @@
 #endif
 
 #include "../include/int8_quant_kernel.h"
+#include "mcoplib_ops_params_info.hpp"
+#include "mcoplib_ops_params_dump.hpp"
+
 typedef __NATIVE_VECTOR__(4, float) v4f32;
 typedef __NATIVE_VECTOR__(4, _Float16) v4f16;
 
@@ -2542,6 +2545,8 @@ void fused_silu_mul_dq_mask_quant_pack(
     at::Tensor const& input, 
     at::Tensor const &mask)
 {
+	DEBUG_TRACE_PARAMS(out, input, &mask);
+	DEBUG_DUMP_PARAMS(out, input, &mask);
   TORCH_CHECK(input.is_contiguous());
   TORCH_CHECK(out.is_contiguous());
   TORCH_CHECK(mask.is_contiguous());
@@ -2630,6 +2635,8 @@ void fused_silu_mul_dq_quant_reordered_topk_interface(
     int64_t start_expert_id,
     int64_t end_expert_id)
 {
+	DEBUG_TRACE_PARAMS(out, scale, input, reorder_topk_ids, w2_scale, start_expert_id, end_expert_id);
+	DEBUG_DUMP_PARAMS(out, scale, input, reorder_topk_ids, w2_scale, start_expert_id, end_expert_id);
   TORCH_CHECK(input.is_contiguous());
   TORCH_CHECK(scale.is_contiguous());
   TORCH_CHECK(out.is_contiguous());
