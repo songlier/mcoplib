@@ -35,6 +35,8 @@
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
+#include "mcoplib_ops_params_info.hpp"
+#include "mcoplib_ops_params_dump.hpp"
 
 namespace vllm {
 namespace moe {
@@ -1171,6 +1173,8 @@ void topk_softmax(
     bool renormalize,
     std::optional<torch::Tensor> bias)
 {
+  DEBUG_TRACE_PARAMS(topk_weights, topk_indices, token_expert_indices, gating_output, renormalize);
+  DEBUG_DUMP_PARAMS(topk_weights, topk_indices, token_expert_indices, gating_output, renormalize);
     const int num_experts = gating_output.size(-1);
     const auto num_tokens = gating_output.numel() / num_experts;
     const int topk = topk_weights.size(-1);
