@@ -6,6 +6,9 @@
 #include "cuda_utils.h"
 #include "greenctx_stream.h"
 
+#include "mcoplib_ops_params_info.hpp"
+#include "mcoplib_ops_params_dump.hpp"
+
 static int CUDA_DRIVER_VERSION;
 
 using PFN_cuGreenCtxStreamCreate = CUresult(CUDAAPI*)(CUstream*, CUgreenCtx, unsigned int, int);
@@ -54,6 +57,8 @@ static std::vector<int64_t> create_greenctx_stream_direct_dynamic(CUgreenCtx gct
 }
 
 std::vector<int64_t> create_greenctx_stream_by_value(int64_t smA, int64_t smB, int64_t device) {
+  DEBUG_TRACE_PARAMS(smA, smB, device);
+  DEBUG_DUMP_PARAMS(smA, smB, device);
   CUDA_DRV(cuDriverGetVersion(&CUDA_DRIVER_VERSION));
 
   CUgreenCtx gctx[3];

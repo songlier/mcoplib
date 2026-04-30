@@ -1379,6 +1379,8 @@ void indexer_k_cache(
     torch::Tensor& kv_cache,     // [num_blocks, block_size, cache_stride]
     torch::Tensor& slot_mapping  // [num_tokens]
 ) {
+  DEBUG_TRACE_PARAMS(k, kv_cache, slot_mapping);
+  DEBUG_DUMP_PARAMS(k, kv_cache, slot_mapping);
   int num_tokens = k.size(0);
   int head_dim = k.size(1);
   int cache_block_size = kv_cache.size(1);
@@ -1518,6 +1520,8 @@ void cp_gather_indexer_k_quant_cache(
     const torch::Tensor& block_table,  // [batch_size, num_blocks]
     const torch::Tensor& cu_seq_lens   // [batch_size + 1]
 ) {
+  DEBUG_TRACE_PARAMS(kv_cache, dst_k, dst_scale, block_table, cu_seq_lens);
+  DEBUG_DUMP_PARAMS(kv_cache, dst_k, dst_scale, block_table, cu_seq_lens);
   int batch_size = block_table.size(0);
   int num_tokens = dst_k.size(0);
   int head_dim = dst_k.size(1);
@@ -1561,6 +1565,8 @@ void concat_mla_q(torch::Tensor& ql_nope,  // [num_tokens, num_heads, nope_dim]
                   torch::Tensor& q_out     // [num_tokens, num_heads, nope_dim +
                                            // rope_dim]
 ) {
+  DEBUG_TRACE_PARAMS(ql_nope, q_pe, q_out);
+  DEBUG_DUMP_PARAMS(ql_nope, q_pe, q_out);
   const int num_tokens = ql_nope.size(0);
   const int num_heads = ql_nope.size(1);
   const int nope_dim = ql_nope.size(2);

@@ -705,6 +705,8 @@ void top_k_per_row_prefill(const torch::Tensor& logits,
                            const torch::Tensor& rowEnds, torch::Tensor& indices,
                            int64_t numRows, int64_t stride0, int64_t stride1,
                            int64_t topK) {
+  DEBUG_TRACE_PARAMS(logits, rowStarts, rowEnds, indices, numRows, stride0, stride1, topK);
+  DEBUG_DUMP_PARAMS(logits, rowStarts, rowEnds, indices, numRows, stride0, stride1, topK);
   constexpr int kSortingAlgorithmThreshold = 12288;
   constexpr int kNumThreadsPerBlock = 512;
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
