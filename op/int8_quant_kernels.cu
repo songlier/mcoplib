@@ -2578,6 +2578,8 @@ void fused_silu_mul_dq_mask_quant_fp8_pack(
     torch::Tensor const& input, 
     torch::Tensor const &mask)
 {
+  DEBUG_TRACE_PARAMS(out, input, mask);
+  DEBUG_DUMP_PARAMS(out, input, mask);
   TORCH_CHECK(input.is_contiguous());
   TORCH_CHECK(out.is_contiguous());
   TORCH_CHECK(mask.is_contiguous());
@@ -2609,6 +2611,8 @@ void fused_silu_mul_dq_quant_interface(
     torch::Tensor& scale,   
     torch::Tensor const& input)
 {
+  DEBUG_TRACE_PARAMS(out, scale, input);
+  DEBUG_DUMP_PARAMS(out, scale, input);
   TORCH_CHECK(input.is_contiguous());
   TORCH_CHECK(scale.is_contiguous());
   TORCH_CHECK(out.is_contiguous());
